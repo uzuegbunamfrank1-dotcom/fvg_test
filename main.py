@@ -24,6 +24,9 @@ import pandas as pd
 
 df = pd.read_csv("data.csv")
 
+print("ROWS LOADED:", len(df))
+print(df.head())
+
 balance = START_BALANCE
 
 buy_trade = None
