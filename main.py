@@ -194,7 +194,7 @@ def handle_symbol(pair):
         logger.warning(f"{symbol} | Not enough strictly closed candles.")     
         return  
     last_closed = closed_candles[-1] 
-    prev1 = closed_candles[-2] 
+    prev1 = closed_candles[-1] 
     prev2 = closed_candles[-3]
     logger.info(f"{symbol} | prev2 H:{prev2['high']} L:{prev2['low']} | prev1 H:{prev1['high']} L:{prev1['low']}")
 
