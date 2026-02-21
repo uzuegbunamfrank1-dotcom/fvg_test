@@ -187,9 +187,16 @@ def handle_symbol(pair):
 
     # Determine non-repaint last_closed, prev1, prev2
     # candles are chronological: candles[-1] = newest (still forming), candles[-2] = last closed
-    last_closed = candles[-2]
-    prev1 = candles[-3]
-    prev2 = candles[-4]
+    now_utc = datetime.now(timezone.utc) 
+    current_candle_open = int(now_utc.timestamp() // (int(INTERVAL)*60)) * (int(INTERVAL)*60) * 1000  # Filter only candles that are strictly closed 
+    closed_candles = [c for c in candles if c["time"] < current_candle_open]  
+    if len(closed_candles) < 3:     
+        logger.warning(f"{symbol} | Not enough strictly closed candles.")     
+        return  
+    last_closed = closed_candles[-1] 
+    prev1 = closed_candles[-2] 
+    prev2 = closed_candles[-3]
+    logger.info(f"{symbol} | prev2 H:{prev2['high']} L:{prev2['low']} | prev1 H:{prev1['high']} L:{prev1['low']}")
 
     # Skip if we've already processed this same closed candle
     if last_closed["time"] == state["last_candle_time"]:
