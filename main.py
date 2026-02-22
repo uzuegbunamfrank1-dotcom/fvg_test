@@ -44,7 +44,7 @@ TP_BUFFER = 0.001                 # additional buffer on TP (kept 0.0 because yo
 # Bybit API (read-only for kline)
 API_KEY = os.getenv("BYBIT_API_KEY", "")
 API_SECRET = os.getenv("BYBIT_API_SECRET", "")
-TESTNET = False   # set True if you want to use Bybit testnet (still paper mode)
+TESTNET = True   # set True if you want to use Bybit testnet (still paper mode)
 # ===========================
 # REAL TRADING SETTINGS
 # ===========================
