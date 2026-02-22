@@ -25,7 +25,7 @@ import pandas as pd
 PAIRS = [
     # Example: multiple trading pairs & leverages
     {"symbol": "BTCUSDT", "leverage": 100},
-    {"symbol": "ETHUSDT", "leverage": 50},
+    {"symbol": "ETHUSDT", "leverage": 100},
     # Add more pairs as needed
 ]
 
@@ -45,6 +45,13 @@ TP_BUFFER = 0.001                 # additional buffer on TP (kept 0.0 because yo
 API_KEY = os.getenv("BYBIT_API_KEY", "")
 API_SECRET = os.getenv("BYBIT_API_SECRET", "")
 TESTNET = False   # set True if you want to use Bybit testnet (still paper mode)
+# ===========================
+# REAL TRADING SETTINGS
+# ===========================
+USE_REAL_TRADING = True       # False = paper, True = real orders
+ACCOUNT_TYPE = "UNIFIED"      # For Bybit UTA
+CATEGORY = "linear"           # USDT Perps
+RF_PERCENT = 0.1             # 1% of balance locked per day
 
 # ===========================
 # LOGGING & STATE
@@ -114,20 +121,47 @@ def seconds_until_next_candle(interval_minutes):
         wait += sec
     return wait
 
+def get_real_balance():
+    try:
+        resp = session.get_wallet_balance(accountType=ACCOUNT_TYPE)
+        coins = resp["result"]["list"][0]["coin"]
+        for c in coins:
+            if c["coin"] == "USDT":
+                return float(c["walletBalance"])
+    except Exception as e:
+        logger.error(f"Error fetching balance: {e}")
+    return 0.0
+
+def position_exists(symbol):
+    try:
+        resp = session.get_positions(category=CATEGORY, symbol=symbol)
+        positions = resp["result"]["list"]
+
+        for p in positions:
+            if float(p["size"]) > 0:
+                return True
+
+    except Exception as e:
+        logger.error(f"{symbol} | Error checking positions: {e}")
+
+    return False
 
 def lock_daily_rf_if_needed():
-    """
-    Lock daily RF at the start of each UTC day (00:00 UTC).
-    Uses global balance and sets daily_rf for entire day.
-    """
-    global current_day, daily_rf, balance
+    global current_day, daily_rf
+
     utc_today = datetime.now(timezone.utc).date()
+
     if utc_today != current_day:
         current_day = utc_today
-        daily_rf = round(balance * DAILY_RISK_PCT, 8)
-        logger.info(f"NEW DAY {current_day} UTC | LOCKED RF = ${daily_rf:.4f} | Balance = ${balance:.4f}")
 
+        real_balance = get_real_balance()
+        daily_rf = round(real_balance * RF_PERCENT, 6)
 
+        logger.info("===========================================")
+        logger.info(f"NEW UTC DAY: {current_day}")
+        logger.info(f"ACCOUNT BALANCE: ${real_balance:.4f}")
+        logger.info(f"LOCKED DAILY RF: ${daily_rf:.4f}")
+        logger.info("===========================================")
 def log_candles(symbol, candles):
     """
     Log every retrieved candle (all fetched candles).
@@ -162,6 +196,17 @@ def simulate_and_resolve_trade(symbol, side, entry_index, entry, sl, tp, candles
                 return "WIN", j
     return "OPEN", None
 
+def set_leverage(symbol, leverage):
+    try:
+        session.set_leverage(
+            category=CATEGORY,
+            symbol=symbol,
+            buyLeverage=str(leverage),
+            sellLeverage=str(leverage)
+        )
+        logger.info(f"{symbol} | Leverage set to {leverage}x")
+    except Exception as e:
+        logger.warning(f"{symbol} | Leverage may already be set: {e}")
 
 # ===========================
 # CORE SYMBOL HANDLER
@@ -177,6 +222,8 @@ def handle_symbol(pair):
     leverage = pair.get("leverage", 1)
     state = symbol_state[symbol]
 
+    set_leverage(symbol, leverage)
+    
     candles = fetch_candles(symbol, interval=INTERVAL, limit=CANDLE_LIMIT)
     if len(candles) < 5:
         logger.warning(f"{symbol} | Not enough candles fetched ({len(candles)}). Skipping this cycle.")
@@ -301,18 +348,13 @@ def handle_symbol(pair):
             sl_pct = (entry - sl) / entry
             if sl_pct >= MIN_SL_PCT:
                 tp = entry + (entry - sl) * RR + (entry * TP_BUFFER)
-                # Open simulated buy trade (DO NOT PLACE any real order)
-                state["buy_trade"] = {
-                    "side": "BUY",
-                    "entry": entry,
-                    "sl": sl,
-                    "tp": tp,
-                    "opened_at": last_closed["time"]
-                }
-                logger.info(f"{symbol} | BUY CONFIRMED and OPENED (paper) | entry={entry} sl={sl} tp={tp} | RF=${daily_rf:.4f}")
+                logger.info(f"{symbol} | BUY CONFIRMED | entry={entry} sl={sl} tp={tp}")
+                if USE_REAL_TRADING:
+                    place_real_trade(symbol, "BUY", entry, sl, tp, leverage)
+                else:
+                    logger.info(f"{symbol} | BUY CONFIRMED (paper only)")
             else:
-                logger.info(f"{symbol} | BUY confirmation ignored: SL too tight (sl_pct={sl_pct:.6f} < {MIN_SL_PCT})")
-
+                logger.info(f"{symbol} | BUY confirmation ignored: SL too tight")
     # SELL confirmation
     if state["sell_fvg"] and state["sell_fvg"]["tapped"] and state["sell_trade"] is None:
         sf = state["sell_fvg"]
@@ -322,17 +364,13 @@ def handle_symbol(pair):
             sl_pct = (sl - entry) / entry
             if sl_pct >= MIN_SL_PCT:
                 tp = entry - (sl - entry) * RR - (entry * TP_BUFFER)
-                state["sell_trade"] = {
-                    "side": "SELL",
-                    "entry": entry,
-                    "sl": sl,
-                    "tp": tp,
-                    "opened_at": last_closed["time"]
-                }
-                logger.info(f"{symbol} | SELL CONFIRMED and OPENED (paper) | entry={entry} sl={sl} tp={tp} | RF=${daily_rf:.4f}")
+                logger.info(f"{symbol} | SELL CONFIRMED | entry={entry} sl={sl} tp={tp}")
+                if USE_REAL_TRADING:
+                    place_real_trade(symbol, "SELL", entry, sl, tp, leverage)
+                else:
+                    logger.info(f"{symbol} | SELL CONFIRMED (paper only)")
             else:
-                logger.info(f"{symbol} | SELL confirmation ignored: SL too tight (sl_pct={sl_pct:.6f} < {MIN_SL_PCT})")
-
+                logger.info(f"{symbol} | SELL confirmation ignored: SL too tight")
     # -----------------------
     # MONITOR OPEN TRADES (do NOT open a new trade on the same side if one is already open)
     # If a trade exists, check last_closed candle for TP / SL hit (SL checked first). Both buy and sell monitored independently.
@@ -364,13 +402,49 @@ def handle_symbol(pair):
             logger.info(f"{symbol} | SELL TP HIT (paper) | +${2 * daily_rf:.4f} | New Balance=${balance:.4f}")
             state["sell_trade"] = None
 
-    # NOTE:
-    # - We intentionally DO NOT close opposite trades when a new signal forms.
-    # - We DO NOT change TP after the trade opens. Only SL may be tightened by favorable new FVGs above.
-    # - We keep buy_fvg and sell_fvg watchers independent.
+    
+def place_real_trade(symbol, side, entry, sl, tp, leverage):
 
-    # End handle_symbol
+    if position_exists(symbol):
+        logger.info(f"{symbol} | Position already exists. Skipping new entry.")
+        return
 
+    try:
+        sl_distance = abs(entry - sl)
+
+        if sl_distance == 0:
+            logger.warning(f"{symbol} | SL distance zero. Aborting trade.")
+            return
+
+        qty = daily_rf / sl_distance
+        qty = qty * leverage
+        qty = round(qty, 3)
+
+        current_balance = get_real_balance()
+        logger.info(f"{symbol} | Current Balance Before Trade: ${current_balance:.4f}")
+        
+        logger.info(f"{symbol} | Placing REAL {side} order | Qty={qty}")
+
+        session.place_order(
+            category=CATEGORY,
+            symbol=symbol,
+            side="Buy" if side == "BUY" else "Sell",
+            orderType="Market",
+            qty=str(qty),
+            timeInForce="IOC"
+        )
+
+        session.set_trading_stop(
+            category=CATEGORY,
+            symbol=symbol,
+            takeProfit=str(tp),
+            stopLoss=str(sl)
+        )
+
+        logger.info(f"{symbol} | Order placed successfully | TP={tp} SL={sl}")
+
+    except Exception as e:
+        logger.error(f"{symbol} | Error placing order: {e}")
 
 # ===========================
 # MAIN LOOP
@@ -379,6 +453,8 @@ def main():
     global balance, daily_rf
 
     logger.info("LIVE PAPER FVG BOT (simulation) STARTED")
+    real_balance = get_real_balance()
+    logger.info(f"STARTUP BALANCE = ${real_balance:.4f}")
     # Lock initial daily RF for current UTC day
     lock_daily_rf_if_needed()
 
