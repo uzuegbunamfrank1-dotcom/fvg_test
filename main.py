@@ -37,7 +37,7 @@ LOG_LEVEL = logging.INFO
 START_BALANCE = 100.0            # starting paper balance (USD)
 DAILY_RISK_PCT = 0.1             # percent of balance to lock as RF at day start (e.g. 0.01 = 1%)
 RR = 2.0                          # reward multiple (2R)
-MIN_SL_PCT = 0.002                # minimum SL percent distance required (0.2%)
+MIN_SL_PCT = 0.0005              # minimum SL percent distance required (0.2%)
 TP_BUFFER = 0.001                 # additional buffer on TP (kept 0.0 because you requested TP fixed)
 # (You can set TP_BUFFER to 0.001 to add +0.1% if wanted in future)
 
@@ -379,6 +379,7 @@ def main():
     global balance, daily_rf
 
     logger.info("LIVE PAPER FVG BOT (simulation) STARTED")
+    logger.info(API_KEY,API_SECRET)
     # Lock initial daily RF for current UTC day
     lock_daily_rf_if_needed()
 
