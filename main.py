@@ -379,7 +379,6 @@ def main():
     global balance, daily_rf
 
     logger.info("LIVE PAPER FVG BOT (simulation) STARTED")
-    logger.info(API_KEY,API_SECRET)
     # Lock initial daily RF for current UTC day
     lock_daily_rf_if_needed()
 
