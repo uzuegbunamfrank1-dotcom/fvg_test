@@ -44,7 +44,7 @@ TESTNET = False
 USE_REAL_TRADING = True
 ACCOUNT_TYPE = "UNIFIED"
 CATEGORY = "linear"
-RF_PERCENT = 0.1
+RF_PERCENT = 0.05
 
 # ===========================
 # LOGGING & STATE
