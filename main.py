@@ -18,6 +18,7 @@ import logging
 from datetime import datetime, timezone
 from pybit.unified_trading import HTTP
 import pandas as pd
+import math
 
 # ===========================
 # CONFIG (CHANGE AS NEEDED)
@@ -31,7 +32,7 @@ CANDLE_LIMIT = 6
 LOG_LEVEL = logging.INFO
 
 START_BALANCE = 100.0
-DAILY_RISK_PCT = 0.05
+DAILY_RISK_PCT = 0.1
 RR = 1.0
 MIN_SL_PCT = 0.001
 TP_BUFFER = 0.001
@@ -44,7 +45,7 @@ TESTNET = False
 USE_REAL_TRADING = True
 ACCOUNT_TYPE = "UNIFIED"
 CATEGORY = "linear"
-RF_PERCENT = 0.05
+RF_PERCENT = 0.1
 
 # ===========================
 # LOGGING & STATE
@@ -173,6 +174,14 @@ def log_candles(symbol, candles):
         t = datetime.utcfromtimestamp(c["time"] / 1000).strftime("%Y-%m-%d %H:%M:%S")
         logger.info(f"{symbol} | {t} | O:{c['open']} H:{c['high']} L:{c['low']} C:{c['close']}")
 
+def get_symbol_step(symbol):
+    info = session.get_instruments_info(
+        category=CATEGORY,
+        symbol=symbol)
+    return float(info["result"]["list"][0]["lotSizeFilter"]["qtyStep"])
+
+def round_qty(qty, step):
+    return math.floor(qty / step) * step
 
 def simulate_and_resolve_trade(symbol, side, entry_index, entry, sl, tp, candles):
     for j in range(entry_index + 1, len(candles)):
@@ -191,6 +200,25 @@ def simulate_and_resolve_trade(symbol, side, entry_index, entry, sl, tp, candles
                 return "WIN", j
     return "OPEN", None
 
+def calculate_liquidation_price(entry, qty, side, leverage, available_balance):
+    """
+    Approximate liquidation price for cross + hedge mode
+    """
+
+    position_value = entry * qty
+    im = 1 / leverage  # initial margin rate
+    mmr = 0.005        # your 0.5% maintenance margin
+
+    extra_margin_ratio = available_balance / position_value
+
+    effective_buffer = im + extra_margin_ratio - mmr
+
+    if side == "Buy":  # LONG
+        lp = entry * (1 - effective_buffer)
+    else:  # SHORT
+        lp = entry * (1 + effective_buffer)
+
+    return lp
 
 def set_leverage(symbol, leverage):
     try:
@@ -257,10 +285,11 @@ def handle_symbol(pair):
             logger.info(f"{symbol} | BUY FVG registered as active watcher (no active buy trade).")
         else:
             bt = state["buy_trade"]
-            if new_low > bt["sl"]:
+            buffered_new_sl = new_low * (1 - SL_BUFFER)
+            if buffered_new_sl > bt["sl"]:
                 old_sl = bt["sl"]
-                bt["sl"] = new_low
-                logger.info(f"{symbol} | BUY trade SL tightened from {old_sl} -> {bt['sl']} due to new BUY FVG")
+                bt["sl"] = buffered_new_sl
+                logger.info(f"{symbol} | BUY SL tightened {old_sl} -> {bt['sl']} (buffered)")
             else:
                 logger.info(f"{symbol} | BUY trade open; new BUY FVG not favorable for SL (new_low={new_low} <= sl={bt['sl']})")
 
@@ -279,10 +308,11 @@ def handle_symbol(pair):
             logger.info(f"{symbol} | SELL FVG registered as active watcher (no active sell trade).")
         else:
             st = state["sell_trade"]
-            if new_high < st["sl"]:
+            buffered_new_sl = new_high * (1 + SL_BUFFER)
+            if buffered_new_sl < st["sl"]:
                 old_sl = st["sl"]
-                st["sl"] = new_high
-                logger.info(f"{symbol} | SELL trade SL tightened from {old_sl} -> {st['sl']} due to new SELL FVG")
+                st["sl"] = buffered_new_sl
+                logger.info(f"{symbol} | SELL SL tightened {old_sl} -> {st['sl']} (buffered)")
             else:
                 logger.info(f"{symbol} | SELL trade open; new SELL FVG not favorable for SL (new_high={new_high} >= sl={st['sl']})")
 
@@ -326,14 +356,49 @@ def handle_symbol(pair):
         bf = state["buy_fvg"]
         if last_closed["close"] > bf["high"]:
             entry = last_closed["close"]
-            sl = bf["low"] * 0.999
+            raw_sl = bf["low"]
+            sl = raw_sl * (1 - SL_BUFFER)
+            
             state["buy_fvg"] = None
             sl_pct = (entry - sl) / entry
             if sl_pct >= MIN_SL_PCT:
                 tp = entry + (entry - sl) * RR + (entry * TP_BUFFER)
                 logger.info(f"{symbol} | BUY CONFIRMED | entry={entry} sl={sl} tp={tp}")
+                if USE_REAL_TRADING and position_exists(symbol, "Sell"):
+                    try:
+                        logger.info(f"{symbol} | Closing existing SELL before opening BUY")
+                        session.place_order(
+                            category=CATEGORY,
+                            symbol=symbol,
+                            side="Buy",
+                            orderType="Market",
+                            qty="0",
+                            reduceOnly=True,
+                            positionIdx=2
+                        )
+                        time.sleep(0.2)  # small delay for safety
+                    except Exception as e:
+                        logger.error(f"{symbol} | Failed closing SELL: {e}")
                 if USE_REAL_TRADING:
-                    place_real_trade(symbol, "BUY", entry, sl, tp, leverage, weekly_rf)
+                    available_balance = get_real_balance()  # use your balance function
+                    risk_amount = weekly_rf  # your frozen risk
+                    raw_qty = risk_amount / abs(entry - sl)
+                    
+                    step = get_symbol_step(symbol)  
+                    qty = round_qty(raw_qty, step)  
+                    
+                    lp = calculate_liquidation_price(
+                        entry=entry,
+                        qty=qty,
+                        side="Buy",
+                        leverage=leverage,
+                        available_balance=available_balance)
+                    
+                    distance_to_lp_pct = abs((sl - lp) / entry)
+                    if distance_to_lp_pct < 0.003:  # 0.1%
+                        logger.info(f"{symbol} | Skipping BUY - SL too close to liquidation ({distance_to_lp_pct*100:.3f}%)")
+                        return
+                    place_real_trade(symbol, "BUY", entry, sl, tp, leverage, weekly_rf,qty)
                 else:
                     state["buy_trade"] = {"side": "BUY","entry": entry,"sl": sl,"tp": tp,"opened_at": last_closed["time"]}
                     logger.info(f"{symbol} | BUY CONFIRMED (paper only)")
@@ -345,21 +410,55 @@ def handle_symbol(pair):
         sf = state["sell_fvg"]
         if last_closed["close"] < sf["low"]:
             entry = last_closed["close"]
-            sl = sf["high"] 
+            raw_sl = sf["high"]
+            sl = raw_sl * (1 + SL_BUFFER)
             state["sell_fvg"] = None
             sl_pct = (sl - entry) / entry
             if sl_pct >= MIN_SL_PCT:
                 tp = entry - (sl - entry) * RR - (entry * TP_BUFFER)
                 logger.info(f"{symbol} | SELL CONFIRMED | entry={entry} sl={sl} tp={tp}")
+                if USE_REAL_TRADING and position_exists(symbol, "Buy"):
+                    try:
+                        logger.info(f"{symbol} | Closing existing BUY before opening SELL")
+                        session.place_order(
+                            category=CATEGORY,
+                            symbol=symbol,
+                            side="Sell",
+                            orderType="Market",
+                            qty="0",
+                            reduceOnly=True,
+                            positionIdx=1)
+                        time.sleep(0.2)
+                    except Exception as e:
+                        logger.error(f"{symbol} | Failed closing BUY: {e}")
                 if USE_REAL_TRADING:
-                    place_real_trade(symbol, "SELL", entry, sl, tp, leverage, weekly_rf)
+                    available_balance = get_real_balance()  # use your balance function
+                    risk_amount = weekly_rf  # your frozen risk
+                    raw_qty = risk_amount / abs(entry - sl)
+                    
+                    step = get_symbol_step(symbol)  
+                    qty = round_qty(raw_qty, step)
+                    
+                    lp = calculate_liquidation_price(
+                        entry=entry,
+                        qty=qty,
+                        side="Sell",
+                        leverage=leverage,
+                        available_balance=available_balance)
+                    
+                    distance_to_lp_pct = abs((lp - sl) / entry)
+                    
+                    if distance_to_lp_pct < 0.003:
+                        logger.info(f"{symbol} | Skipping SELL - SL too close to liquidation ({distance_to_lp_pct*100:.3f}%)")
+                        return
+                    place_real_trade(symbol, "SELL", entry, sl, tp, leverage, weekly_rf, qty)
                 else:
                     state["sell_trade"] = {"side": "SELL","entry": entry,"sl": sl,"tp": tp,"opened_at": last_closed["time"]}
                     logger.info(f"{symbol} | SELL CONFIRMED (paper only)")
             else:
                 logger.info(f"{symbol} | SELL confirmation ignored: SL too tight")
     
-def place_real_trade(symbol, side, entry, sl, tp, leverage, frozen_risk):
+def place_real_trade(symbol, side, entry, sl, tp, leverage, frozen_risk, qty):
 
     side = side.upper()
 
@@ -398,13 +497,8 @@ def place_real_trade(symbol, side, entry, sl, tp, leverage, frozen_risk):
             return
 
         # Apply buffer ONLY to position sizing
-        buffered_sl_distance = (
-            sl_distance
-            + (sl_distance * 0.001)
-        )
-
-        qty = frozen_risk / buffered_sl_distance
-        qty = round(qty, 3)
+        extra_buffer_distance = entry * SL_BUFFER
+        buffered_sl_distance = sl_distance + extra_buffer_distance
 
         if qty <= 0:
             logger.warning(f"{symbol} | Calculated qty invalid ({qty}). Aborting.")
@@ -412,7 +506,7 @@ def place_real_trade(symbol, side, entry, sl, tp, leverage, frozen_risk):
 
         logger.info(f"{symbol} | Frozen Risk: ${frozen_risk:.4f}")
         logger.info(f"{symbol} | Qty Calculated: {qty}")
-
+        
         # ----------------------------
         # PLACE MARKET ORDER
         # ----------------------------
