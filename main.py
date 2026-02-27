@@ -153,10 +153,10 @@ def lock_weekly_rf_if_needed():
         real_balance = get_real_balance()
 
         # siphon 25%
-        siphon_amount = real_balance * 0.25
+        siphon_amount = real_balance * 0
         siphoned_cash += siphon_amount
 
-        effective_balance = real_balance * 0.75
+        effective_balance = real_balance 
 
         weekly_rf = round(effective_balance * RF_PERCENT, 6)
 
@@ -338,13 +338,13 @@ def handle_symbol(pair):
     # -----------------------
     if state["buy_fvg"]:
         bf = state["buy_fvg"]
-        if last_closed["close"] < bf["low"]:
+        if last_closed["low"] < bf["low"]:
             logger.info(f"{symbol} | BUY FVG INVALIDATED (closed below {bf['low']})")
             state["buy_fvg"] = None
 
     if state["sell_fvg"]:
         sf = state["sell_fvg"]
-        if last_closed["close"] > sf["high"]:
+        if last_closed["high"] > sf["high"]:
             logger.info(f"{symbol} | SELL FVG INVALIDATED (closed above {sf['high']})")
             state["sell_fvg"] = None
 
@@ -356,8 +356,19 @@ def handle_symbol(pair):
         bf = state["buy_fvg"]
         if last_closed["close"] > bf["high"]:
             entry = last_closed["close"]
-            raw_sl = bf["low"]
-            sl = raw_sl * (1 - SL_BUFFER)
+            structure_low = bf["low"]
+            
+            risk_sl = structure_low * (1 - 2 * SL_BUFFER)
+            
+            real_sl = structure_low * (1 - SL_BUFFER)
+            
+            risk_amount = weekly_rf
+            raw_qty = risk_amount / abs(entry - risk_sl)
+            
+            step = get_symbol_step(symbol)
+            qty = round_qty(raw_qty, step)
+            
+            sl = real_sl  # this is what will be sent to exchange
             
             state["buy_fvg"] = None
             sl_pct = (entry - sl) / entry
@@ -382,7 +393,7 @@ def handle_symbol(pair):
                 if USE_REAL_TRADING:
                     available_balance = get_real_balance()  # use your balance function
                     risk_amount = weekly_rf  # your frozen risk
-                    raw_qty = risk_amount / abs(entry - sl)
+                    raw_qty = risk_amount / abs(entry - risk_sl)
                     
                     step = get_symbol_step(symbol)  
                     qty = round_qty(raw_qty, step)  
@@ -410,8 +421,20 @@ def handle_symbol(pair):
         sf = state["sell_fvg"]
         if last_closed["close"] < sf["low"]:
             entry = last_closed["close"]
-            raw_sl = sf["high"]
-            sl = raw_sl * (1 + SL_BUFFER)
+            
+            structure_high = sf["high"]
+            risk_sl = structure_high * (1 + 2 * SL_BUFFER)
+            
+            real_sl = structure_high * (1 + SL_BUFFER)
+            
+            risk_amount = weekly_rf
+            raw_qty = risk_amount / abs(entry - risk_sl)
+            
+            step = get_symbol_step(symbol)
+            qty = round_qty(raw_qty, step)
+            
+            sl = real_sl
+
             state["sell_fvg"] = None
             sl_pct = (sl - entry) / entry
             if sl_pct >= MIN_SL_PCT:
@@ -434,7 +457,7 @@ def handle_symbol(pair):
                 if USE_REAL_TRADING:
                     available_balance = get_real_balance()  # use your balance function
                     risk_amount = weekly_rf  # your frozen risk
-                    raw_qty = risk_amount / abs(entry - sl)
+                    raw_qty = risk_amount / abs(entry - risk_sl)
                     
                     step = get_symbol_step(symbol)  
                     qty = round_qty(raw_qty, step)
