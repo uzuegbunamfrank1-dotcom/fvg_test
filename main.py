@@ -181,8 +181,8 @@ def get_symbol_step(symbol):
     return float(info["result"]["list"][0]["lotSizeFilter"]["qtyStep"])
 
 def round_qty(qty, step):
-    return max((math.floor(qty / step) * step) , 0.001)
-
+    return max(round(qty / step) * step, step)
+    
 def simulate_and_resolve_trade(symbol, side, entry_index, entry, sl, tp, candles):
     for j in range(entry_index + 1, len(candles)):
         high = candles[j]["high"]
