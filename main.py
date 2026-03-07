@@ -840,7 +840,7 @@ def update_daily_bias():
     candle2 = daily_df.iloc[-2]
     candle3 = daily_df.iloc[-3]
     candle4 = daily_df.iloc[-4]
-    candle5 = daily_df.iloc[-5]
+    
     
 
     buy_fvg_exists = candle3["low"] > candle1["high"]
