@@ -1137,12 +1137,12 @@ def handle_symbol(pair):
         sf = state["sell_fvg"]
 
 
-         if sf["deepest_touch"] is not None:
-             filled_enough = sf["deepest_touch"] >= sf["mid"]
-             extreme_not_touched = sf["deepest_touch"] < sf["high"]
-             if not (filled_enough and extreme_not_touched):
-                 logger.info(f"{symbol} | SELL ignored: did not breach midpoint or touched extreme")
-                 return
+        if sf["deepest_touch"] is not None:
+            filled_enough = sf["deepest_touch"] >= sf["mid"]
+            extreme_not_touched = sf["deepest_touch"] < sf["high"]
+            if not (filled_enough and extreme_not_touched):
+                logger.info(f"{symbol} | SELL ignored: did not breach midpoint or touched extreme")
+                return
 
         if not daily_fvg_state["allow_sell"]:
             logger.info(f"{symbol} | Daily bias does not allow SELL, skipping")
