@@ -834,13 +834,10 @@ def update_daily_bias():
     # -------------------------
     # Correct FVG candle logic
     # -------------------------
-    candle0 = daily_df.iloc[0]
-    candle1 = daily_df.iloc[-1]
-    candle2 = daily_df.iloc[-2]
-    candle3 = daily_df.iloc[-3]
-    candle4 = daily_df.iloc[-4]
-    candle5 = daily_df.iloc[-5]
-    candle6 = daily_df.iloc[-6]
+    
+    candle1 = daily_df.iloc[-3]
+    candle3 = daily_df.iloc[-5]
+    
 
     buy_fvg_exists = candle3["low"] > candle1["high"]
     sell_fvg_exists = candle3["high"] < candle1["low"]
@@ -862,13 +859,10 @@ def update_daily_bias():
     # Debug logging
     # -------------------------
     logger.info("DAILY FVG CHECK")
-    logger.info(f"C0 H:{candle0['high']} L:{candle0['low']}")
-    logger.info(f"C1 H:{candle1['high']} L:{candle1['low']}")
-    logger.info(f"C2 H:{candle2['high']} L:{candle2['low']}")
+    
     logger.info(f"C3 H:{candle3['high']} L:{candle3['low']}")
-    logger.info(f"C4 H:{candle4['high']} L:{candle4['low']}")
-    logger.info(f"C5 H:{candle5['high']} L:{candle5['low']}")
-    logger.info(f"C6 H:{candle6['high']} L:{candle6['low']}")
+    logger.info(f"C1 H:{candle1['high']} L:{candle1['low']}")
+    
     
 def log_candles(symbol, candles):
     logger.info(f"{symbol} | Retrieved {len(candles)} candles (oldest -> newest).")
