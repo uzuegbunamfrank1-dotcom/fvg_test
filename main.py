@@ -783,8 +783,8 @@ def update_daily_bias():
     today = datetime.now(timezone.utc).date()
 
     # Run once per day
-    # if last_daily_check == today:
-    #     return
+    if last_daily_check == today:
+        return
 
     last_daily_check = today
     logger.info("Running daily FVG scan...")
@@ -808,7 +808,7 @@ def update_daily_bias():
     resp = session.get_kline(
         category="linear",
         symbol="BTCUSDT",
-        interval=5,
+        interval="D",
         limit=6
     )
 
@@ -860,6 +860,79 @@ def update_daily_bias():
     # -------------------------
     logger.info("DAILY FVG CHECK")
     
+    logger.info(f"C1 H:{candle1['high']} L:{candle1['low']}")
+    logger.info(f"C3 H:{candle3['high']} L:{candle3['low']}")
+
+def update_bias_5m():
+    global daily_fvg_state
+
+    logger.info("Running 5m bias scan...")
+
+    # --------------------------
+    # Expire bias after 30 minutes (testing)
+    # --------------------------
+    now = datetime.now(timezone.utc)
+
+    if daily_fvg_state["last_new_buy_fvg"]:
+        age = (now - daily_fvg_state["last_new_buy_fvg"]).total_seconds()
+        if age >= 1800:  # 30 minutes
+            daily_fvg_state["allow_buy"] = False
+            logger.info("BUY bias expired")
+
+    if daily_fvg_state["last_new_sell_fvg"]:
+        age = (now - daily_fvg_state["last_new_sell_fvg"]).total_seconds()
+        if age >= 1800:
+            daily_fvg_state["allow_sell"] = False
+            logger.info("SELL bias expired")
+
+    # --------------------------
+    # Get 5m candles
+    # --------------------------
+    resp = session.get_kline(
+        category="linear",
+        symbol="BTCUSDT",
+        interval="5",
+        limit=6
+    )
+
+    raw = resp["result"]["list"]
+    candles = list(reversed(raw))
+
+    df = pd.DataFrame([{
+        "time": int(c[0]),
+        "open": float(c[1]),
+        "high": float(c[2]),
+        "low": float(c[3]),
+        "close": float(c[4])
+    } for c in candles])
+
+    if len(df) < 3:
+        return
+
+    # --------------------------
+    # FVG calculation
+    # --------------------------
+    candle1 = daily_df.iloc[-2]
+    candle3 = daily_df.iloc[-4]
+    
+
+    bull_fvg = candle3["low"] > candle1["high"]
+    bear_fvg = candle3["high"] < candle1["low"]
+
+    # --------------------------
+    # Update bias
+    # --------------------------
+    if bull_fvg:
+        daily_fvg_state["allow_buy"] = True
+        daily_fvg_state["last_new_buy_fvg"] = datetime.now(timezone.utc)
+        logger.info("5m BUY FVG detected -> allow_buy = TRUE")
+
+    if bear_fvg:
+        daily_fvg_state["allow_sell"] = True
+        daily_fvg_state["last_new_sell_fvg"] = datetime.now(timezone.utc)
+        logger.info("5m SELL FVG detected -> allow_sell = TRUE")
+
+    logger.info("5M FVG CHECK")
     logger.info(f"C1 H:{candle1['high']} L:{candle1['low']}")
     logger.info(f"C3 H:{candle3['high']} L:{candle3['low']}")
     
@@ -1318,6 +1391,7 @@ def main():
     logger.info(f"STARTUP BALANCE = ${real_balance:.4f}")
     # Lock initial daily RF for current UTC day
     update_daily_bias()
+    update_bias_5m()
     lock_weekly_rf_if_needed()
 
     try:
