@@ -778,71 +778,88 @@ def lock_weekly_rf_if_needed():
         logger.info("===========================================")
 
 def update_daily_bias():
-     global daily_fvg_state, last_daily_check
-    
-     today = datetime.now(timezone.utc).date()
-    
-     # run only once per day
-     if last_daily_check == today:
-         return
-     last_daily_check = today
-     logger.info("Running daily FVG scan...")
+    global daily_fvg_state, last_daily_check
 
-     if daily_fvg_state["last_new_buy_fvg"]:
-         if (today - daily_fvg_state["last_new_buy_fvg"]).days >= 2:
-             daily_fvg_state["allow_buy"] = False
-             logger.info("BUY FVG expired (2 days)")
+    today = datetime.now(timezone.utc).date()
 
-     if daily_fvg_state["last_new_sell_fvg"]:
-         if (today - daily_fvg_state["last_new_sell_fvg"]).days >= 2:
-             daily_fvg_state["allow_sell"] = False
-             logger.info("SELL FVG expired (2 days)")
+    # Run once per day
+    if last_daily_check == today:
+        return
 
+    last_daily_check = today
+    logger.info("Running daily FVG scan...")
 
-     # Check latest daily candle FVG levels
-     resp = session.get_kline(
-         category="linear",
-         symbol="BTCUSDT",
-         interval=5,
-         limit=6)
-     raw = resp["result"]["list"]
-     candles = list(reversed(raw))
+    # -------------------------
+    # Expire old FVG permissions
+    # -------------------------
+    if daily_fvg_state["last_new_buy_fvg"]:
+        if (today - daily_fvg_state["last_new_buy_fvg"]).days >= 2:
+            daily_fvg_state["allow_buy"] = False
+            logger.info("BUY FVG expired (2 days)")
 
-     daily_df = []
+    if daily_fvg_state["last_new_sell_fvg"]:
+        if (today - daily_fvg_state["last_new_sell_fvg"]).days >= 2:
+            daily_fvg_state["allow_sell"] = False
+            logger.info("SELL FVG expired (2 days)")
 
-     for c in candles:
-         daily_df.append({
-             "time": int(c[0]),
-             "open": float(c[1]),
-             "high": float(c[2]),
-             "low": float(c[3]),
-             "close": float(c[4])})
-     daily_df['datetime'] = pd.to_datetime(daily_df['datetime'])
-     daily_df['date'] = daily_df['datetime'].dt.date
+    # -------------------------
+    # Get daily candles
+    # -------------------------
+    resp = session.get_kline(
+        category="linear",
+        symbol="BTCUSDT",
+        interval=5,
+        limit=7
+    )
 
-     if len(daily_df) < 4:  # need at least 3 prior candles to check FVG
-         return
+    raw = resp["result"]["list"]
+    candles = list(reversed(raw))
 
-     last_idx = 0  # most recent daily candle
-     prev1 = daily_df.iloc[last_idx-1]
-     prev2 = daily_df.iloc[last_idx-3]
+    # Convert to dataframe
+    daily_df = pd.DataFrame([{
+        "time": int(c[0]),
+        "open": float(c[1]),
+        "high": float(c[2]),
+        "low": float(c[3]),
+        "close": float(c[4])
+    } for c in candles])
 
-     buy_fvg_exists = prev1["low"] > prev2["high"]
-     sell_fvg_exists = prev1["high"] < prev2["low"]
+    # Add datetime column
+    daily_df["datetime"] = pd.to_datetime(daily_df["time"], unit="ms")
+    daily_df["date"] = daily_df["datetime"].dt.date
 
-     if buy_fvg_exists:
-         daily_fvg_state["allow_buy"] = True
-         daily_fvg_state["last_new_fvg_date"] = today
-         logger.info(f"Daily BUY FVG found - allow_buy=True")
-         
-     if sell_fvg_exists:
-         daily_fvg_state["allow_sell"] = True
-         daily_fvg_state["last_new_fvg_date"] = today
-         logger.info(f"Daily SELL FVG found - allow_sell=True")
-     logger.info("DAILY FVG CHECK")
-     logger.info(f"Candle1 H:{prev1['high']} L:{prev1['low']}")
-     logger.info(f"Candle3 H:{prev2['high']} L:{prev2['low']}")
-    
+    if len(daily_df) < 3:
+        return
+
+    # -------------------------
+    # Correct FVG candle logic
+    # -------------------------
+    candle1 = daily_df.iloc[-3]
+    candle2 = daily_df.iloc[-2]
+    candle3 = daily_df.iloc[-1]
+
+    buy_fvg_exists = candle3["low"] > candle1["high"]
+    sell_fvg_exists = candle3["high"] < candle1["low"]
+
+    # -------------------------
+    # Update bias flags
+    # -------------------------
+    if buy_fvg_exists:
+        daily_fvg_state["allow_buy"] = True
+        daily_fvg_state["last_new_buy_fvg"] = today
+        logger.info("Daily BUY FVG detected -> allow_buy = TRUE")
+
+    if sell_fvg_exists:
+        daily_fvg_state["allow_sell"] = True
+        daily_fvg_state["last_new_sell_fvg"] = today
+        logger.info("Daily SELL FVG detected -> allow_sell = TRUE")
+
+    # -------------------------
+    # Debug logging
+    # -------------------------
+    logger.info("DAILY FVG CHECK")
+    logger.info(f"C1 H:{candle1['high']} L:{candle1['low']}")
+    logger.info(f"C3 H:{candle3['high']} L:{candle3['low']}")    
 
 def log_candles(symbol, candles):
     logger.info(f"{symbol} | Retrieved {len(candles)} candles (oldest -> newest).")
