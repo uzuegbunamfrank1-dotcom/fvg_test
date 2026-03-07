@@ -912,8 +912,8 @@ def update_bias_5m():
     # --------------------------
     # FVG calculation
     # --------------------------
-    candle1 = daily_df.iloc[-2]
-    candle3 = daily_df.iloc[-4]
+    candle1 = df.iloc[-2]
+    candle3 = df.iloc[-4]
     
 
     bull_fvg = candle3["low"] > candle1["high"]
