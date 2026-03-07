@@ -809,7 +809,7 @@ def update_daily_bias():
         category="linear",
         symbol="BTCUSDT",
         interval=5,
-        limit=7
+        limit=6
     )
 
     raw = resp["result"]["list"]
@@ -834,9 +834,13 @@ def update_daily_bias():
     # -------------------------
     # Correct FVG candle logic
     # -------------------------
-    
-    candle1 = daily_df.iloc[-3]
-    candle3 = daily_df.iloc[-5]
+
+    candle0 = daily_df.iloc[0]
+    candle1 = daily_df.iloc[-1]
+    candle2 = daily_df.iloc[-2]
+    candle3 = daily_df.iloc[-3]
+    candle4 = daily_df.iloc[-4]
+    candle5 = daily_df.iloc[-5]
     
 
     buy_fvg_exists = candle3["low"] > candle1["high"]
@@ -860,8 +864,12 @@ def update_daily_bias():
     # -------------------------
     logger.info("DAILY FVG CHECK")
     
+    logger.info(f"C3 H:{candle0['high']} L:{candle0['low']}")
+    logger.info(f"C3 H:{candle1['high']} L:{candle1['low']}")
+    logger.info(f"C3 H:{candle2['high']} L:{candle2['low']}")
     logger.info(f"C3 H:{candle3['high']} L:{candle3['low']}")
-    logger.info(f"C1 H:{candle1['high']} L:{candle1['low']}")
+    logger.info(f"C3 H:{candle4['high']} L:{candle4['low']}")
+    logger.info(f"C1 H:{candle5['high']} L:{candle5['low']}")
     
     
 def log_candles(symbol, candles):
