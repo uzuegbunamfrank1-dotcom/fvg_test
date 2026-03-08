@@ -366,7 +366,7 @@
 #             raw_qty = risk_amount / abs(entry - risk_sl)
             
 #             step = get_symbol_step(symbol)
-#             qty = round_qty(raw_qty, step)
+#             qty = round_qty(symbol, raw_qty)  qty = fit_qty_to_margin(     symbol,     entry,     leverage,     qty )  if qty is None:     logger.info(f"{symbol} | Not enough margin for trade")     return
             
 #             sl = real_sl  # this is what will be sent to exchange
             
@@ -396,7 +396,7 @@
 #                     raw_qty = risk_amount / abs(entry - risk_sl)
                     
 #                     step = get_symbol_step(symbol)  
-#                     qty = round_qty(raw_qty, step)  
+#                     qty = round_qty(symbol, raw_qty)  qty = fit_qty_to_margin(     symbol,     entry,     leverage,     qty )  if qty is None:     logger.info(f"{symbol} | Not enough margin for trade")     return  
                     
 #                     lp = calculate_liquidation_price(
 #                         entry=entry,
@@ -431,7 +431,7 @@
 #             raw_qty = risk_amount / abs(entry - risk_sl)
             
 #             step = get_symbol_step(symbol)
-#             qty = round_qty(raw_qty, step)
+#             qty = round_qty(symbol, raw_qty)  qty = fit_qty_to_margin(     symbol,     entry,     leverage,     qty )  if qty is None:     logger.info(f"{symbol} | Not enough margin for trade")     return
             
 #             sl = real_sl
 
@@ -460,7 +460,7 @@
 #                     raw_qty = risk_amount / abs(entry - risk_sl)
                     
 #                     step = get_symbol_step(symbol)  
-#                     qty = round_qty(raw_qty, step)
+#                     qty = round_qty(symbol, raw_qty)  qty = fit_qty_to_margin(     symbol,     entry,     leverage,     qty )  if qty is None:     logger.info(f"{symbol} | Not enough margin for trade")     return
                     
 #                     lp = calculate_liquidation_price(
 #                         entry=entry,
@@ -599,7 +599,8 @@
 #     main()
 
 
-# !/usr/bin/env python3
+!/usr/bin/env python3
+make the sl to be the highest or lowest of the mid and deepest touch of confirmed buy and sell
 """
 LIVE PAPER FVG BOT (simulation only)
 
@@ -625,16 +626,26 @@ import math
 # CONFIG (CHANGE AS NEEDED)
 # ===========================
 PAIRS = [
-    {"symbol": "BTCUSDT", "leverage": 100}
+    {"symbol": "ARBUSDT", "leverage": 50},
+    {"symbol": "APTUSDT", "leverage": 50},
+    {"symbol": "LINKUSDT", "leverage": 50},
+    {"symbol": "AVAXUSDT", "leverage": 50},
+    {"symbol": "BNBUSDT", "leverage": 50},
+    {"symbol": "DOGEUSDT", "leverage": 75},
+    {"symbol": "SUIUSDT", "leverage": 50},
+    {"symbol": "BTCUSDT", "leverage": 100},
+    {"symbol": "ETHUSDT", "leverage": 100},
+    {"symbol": "SOLUSDT", "leverage": 100},
 ]
+symbol_specs = {}
 
-INTERVAL = "1"
+INTERVAL = "30"
 CANDLE_LIMIT = 6
 LOG_LEVEL = logging.INFO
 
 START_BALANCE = 100.0
 DAILY_RISK_PCT = 0.1
-RR = 1.0
+RR = 2
 MIN_SL_PCT = 0.001
 TP_BUFFER = 0.001
 SL_BUFFER = 0.001
@@ -720,6 +731,41 @@ def seconds_until_next_candle(interval_minutes):
         wait += sec
     return wait
 
+def get_symbol_specs(symbol):
+    if symbol in symbol_specs:
+        return symbol_specs[symbol]
+
+    info = session.get_instruments_info(
+        category="linear",
+        symbol=symbol
+    )
+
+    data = info["result"]["list"][0]
+
+    specs = {
+        "qty_step": float(data["lotSizeFilter"]["qtyStep"]),
+        "min_qty": float(data["lotSizeFilter"]["minOrderQty"]),
+        "tick_size": float(data["priceFilter"]["tickSize"]),
+        "max_leverage": float(data["leverageFilter"]["maxLeverage"])
+    }
+
+    symbol_specs[symbol] = specs
+    return specs
+
+def set_symbol_leverage(symbol, desired):
+
+    specs = get_symbol_specs(symbol)
+
+    lev = min(desired, specs["max_leverage"])
+
+    session.set_leverage(
+        category="linear",
+        symbol=symbol,
+        buyLeverage=str(lev),
+        sellLeverage=str(lev)
+    )
+
+    logger.info(f"{symbol} leverage set to {lev}")
 
 def get_real_balance():
     try:
@@ -780,7 +826,7 @@ def lock_weekly_rf_if_needed():
 def update_daily_bias():
     global daily_fvg_state, last_daily_check
 
-    today = datetime.now(timezone.utc)
+    today = datetime.now(timezone.utc).date()
 
     # Run once per day
     if last_daily_check == today:
@@ -947,15 +993,92 @@ def log_candles(symbol, candles):
         t = datetime.utcfromtimestamp(c["time"] / 1000).strftime("%Y-%m-%d %H:%M:%S")
         logger.info(f"{symbol} | {t} | O:{c['open']} H:{c['high']} L:{c['low']} C:{c['close']}")
 
-def get_symbol_step(symbol):
-    info = session.get_instruments_info(
-        category=CATEGORY,
-        symbol=symbol)
-    return float(info["result"]["list"][0]["lotSizeFilter"]["qtyStep"])
+def round_qty(symbol, qty):
 
-def round_qty(qty, step):
-    return max(round(qty / step) * step, step)
-    
+    specs = get_symbol_specs(symbol)
+
+    step = specs["qty_step"]
+    min_qty = specs["min_qty"]
+
+    qty = max(round(qty / step) * step, min_qty)
+
+    return qty    
+
+def get_margin_usage():
+
+    resp = session.get_wallet_balance(accountType="UNIFIED")
+
+    data = resp["result"]["list"][0]
+
+    total = float(data["totalEquity"])
+    used = float(data["totalInitialMargin"])
+
+    return total, used
+
+def margin_available_for_trade(required_margin):
+
+    total, used = get_margin_usage()
+
+    max_allowed = total * 0.8
+
+    if used + required_margin > max_allowed:
+
+        remaining = max_allowed - used
+
+        if remaining <= 0:
+            return False, 0
+
+        return True, remaining
+
+    return True, required_margin
+
+def calculate_margin_required(price, qty, leverage):
+
+    position_value = price * qty
+
+    margin = position_value / leverage
+
+    return margin
+
+def trade_value_ok(price, qty):
+
+    return price * qty >= 5
+
+def fit_qty_to_margin(symbol, price, leverage, desired_qty):
+
+    margin_needed = calculate_margin_required(price, desired_qty, leverage)
+
+    ok, allowed_margin = margin_available_for_trade(margin_needed)
+
+    if ok:
+        return desired_qty
+
+    # reduce qty to fit remaining margin
+
+    new_position_value = allowed_margin * leverage
+    new_qty = new_position_value / price
+
+    new_qty = round_qty(symbol, new_qty)
+
+    if not trade_value_ok(price, new_qty):
+        return None
+
+    return new_qty
+
+def get_total_open_positions():
+
+    resp = session.get_positions(category="linear")
+
+    positions = resp["result"]["list"]
+
+    count = 0
+
+    for p in positions:
+        if float(p["size"]) > 0:
+            count += 1
+
+    return count
+
 def simulate_and_resolve_trade(symbol, side, entry_index, entry, sl, tp, candles):
     for j in range(entry_index + 1, len(candles)):
         high = candles[j]["high"]
@@ -993,15 +1116,6 @@ def calculate_liquidation_price(entry, qty, side, leverage, available_balance):
 
     return lp
 
-def set_leverage(symbol, leverage):
-    try:
-        session.set_leverage(category=CATEGORY, symbol=symbol,
-                             buyLeverage=str(leverage), sellLeverage=str(leverage))
-        logger.info(f"{symbol} | Leverage set to {leverage}x")
-    except Exception as e:
-        logger.warning(f"{symbol} | Leverage may already be set: {e}")
-
-
 # ===========================
 # CORE SYMBOL HANDLER
 # ===========================
@@ -1011,8 +1125,6 @@ def handle_symbol(pair):
     symbol = pair["symbol"]
     leverage = pair.get("leverage", 1)
     state = symbol_state[symbol]
-
-    set_leverage(symbol, leverage)
     
     candles = fetch_candles(symbol, interval=INTERVAL, limit=CANDLE_LIMIT)
     if len(candles) < 5:
@@ -1065,7 +1177,7 @@ def handle_symbol(pair):
             logger.info(f"{symbol} | BUY FVG registered as active watcher (no active buy trade).")
         else:
             bt = state["buy_trade"]
-            buffered_new_sl = new_low * (1 - SL_BUFFER)
+            buffered_new_sl = mid
             if buffered_new_sl > bt["sl"]:
                 old_sl = bt["sl"]
                 bt["sl"] = buffered_new_sl
@@ -1095,7 +1207,7 @@ def handle_symbol(pair):
             logger.info(f"{symbol} | SELL FVG registered as active watcher (no active sell trade).")
         else:
             st = state["sell_trade"]
-            buffered_new_sl = new_high * (1 + SL_BUFFER)
+            buffered_new_sl = mid
             if buffered_new_sl < st["sl"]:
                 old_sl = st["sl"]
                 st["sl"] = buffered_new_sl
@@ -1168,15 +1280,31 @@ def handle_symbol(pair):
             entry = last_closed["close"]
             structure_low = bf["low"]
             
-            risk_sl = structure_low * (1 - 2 * SL_BUFFER)
+            mid = new_low + (new_high - new_low) * 0.5
             
-            real_sl = structure_low * (1 - SL_BUFFER)
+            risk_sl = mid * (1 - SL_BUFFER)
+            
+            real_sl = mid
             
             risk_amount = weekly_rf
             raw_qty = risk_amount / abs(entry - risk_sl)
             
-            step = get_symbol_step(symbol)
-            qty = round_qty(raw_qty, step)
+            specs = get_symbol_specs(symbol)
+            step = specs["qty_step"]
+            
+            qty = round_qty(symbol, raw_qty)
+            qty = fit_qty_to_margin(     
+                symbol,     
+                entry,   
+                leverage, 
+                qty) 
+            if qty is None:  
+                logger.info(f"{symbol} | Not enough margin for trade")  
+                return
+
+            if not trade_value_ok(entry, qty):
+                logger.info(f"{symbol} | Trade value < $5. Skipping")
+                return
             
             sl = real_sl  # this is what will be sent to exchange
             
@@ -1205,8 +1333,22 @@ def handle_symbol(pair):
                     risk_amount = weekly_rf  # your frozen risk
                     raw_qty = risk_amount / abs(entry - risk_sl)
                     
-                    step = get_symbol_step(symbol)  
-                    qty = round_qty(raw_qty, step)  
+                    specs = get_symbol_specs(symbol)
+                    step = specs["qty_step"]
+                    
+                    qty = round_qty(symbol, raw_qty)
+                    qty = fit_qty_to_margin(     
+                        symbol,     
+                        entry,   
+                        leverage, 
+                        qty) 
+                    if qty is None:  
+                        logger.info(f"{symbol} | Not enough margin for trade")  
+                        return
+
+                    if not trade_value_ok(entry, qty):
+                        logger.info(f"{symbol} | Trade value < $5. Skipping")
+                        return
                     
                     lp = calculate_liquidation_price(
                         entry=entry,
@@ -1245,16 +1387,32 @@ def handle_symbol(pair):
             entry = last_closed["close"]
             
             structure_high = sf["high"]
-            risk_sl = structure_high * (1 + 2 * SL_BUFFER)
+            mid = new_high - (new_high - new_low) * 0.5
             
-            real_sl = structure_high * (1 + SL_BUFFER)
+            risk_sl = mid * (1 + SL_BUFFER)
+            
+            real_sl = mid
             
             risk_amount = weekly_rf
             raw_qty = risk_amount / abs(entry - risk_sl)
             
-            step = get_symbol_step(symbol)
-            qty = round_qty(raw_qty, step)
+            specs = get_symbol_specs(symbol)
+            step = specs["qty_step"]
             
+            qty = round_qty(symbol, raw_qty)  
+            qty = fit_qty_to_margin(     
+                symbol,   
+                entry,    
+                leverage,   
+                qty) 
+            if qty is None:  
+                logger.info(f"{symbol} | Not enough margin for trade")  
+                return
+
+            if not trade_value_ok(entry, qty):
+                logger.info(f"{symbol} | Trade value < $5. Skipping")
+                return
+                
             sl = real_sl
 
             state["sell_fvg"] = None
@@ -1281,9 +1439,23 @@ def handle_symbol(pair):
                     risk_amount = weekly_rf  # your frozen risk
                     raw_qty = risk_amount / abs(entry - risk_sl)
                     
-                    step = get_symbol_step(symbol)  
-                    qty = round_qty(raw_qty, step)
+                    specs = get_symbol_specs(symbol)
+                    step = specs["qty_step"]
                     
+                    qty = round_qty(symbol, raw_qty) 
+                    qty = fit_qty_to_margin(   
+                        symbol,  
+                        entry,   
+                        leverage,
+                        qty) 
+                    if qty is None:   
+                        logger.info(f"{symbol} | Not enough margin for trade")  
+                        return
+
+                    if not trade_value_ok(entry, qty):
+                        logger.info(f"{symbol} | Trade value < $5. Skipping")
+                        return
+                        
                     lp = calculate_liquidation_price(
                         entry=entry,
                         qty=qty,
@@ -1310,6 +1482,9 @@ def place_real_trade(symbol, side, entry, sl, tp, leverage, frozen_risk, qty):
     # ----------------------------
     # Determine side + positionIdx
     # ----------------------------
+    if get_total_open_positions() >= 5:
+        logger.info("Max 5 open trades reached. Skipping.")
+        return
     if side == "BUY":
         order_side = "Buy"
         position_idx = 1
@@ -1392,6 +1567,10 @@ def main():
     logger.info(f"STARTUP BALANCE = ${real_balance:.4f}")
     # Lock initial daily RF for current UTC day
     # update_daily_bias()
+
+    for p in PAIRS:
+        set_symbol_leverage(p["symbol"], p["leverage"])
+        
     lock_weekly_rf_if_needed()
 
     try:
@@ -1401,7 +1580,7 @@ def main():
             logger.info(f"Waiting {wait}s for next {INTERVAL}m candle close (UTC)...")
             time.sleep(wait + 0.8)  # small offset to ensure candle is closed on exchange
 
-            update_bias_5m()
+            update_daily_bias()
             
             # Lock per-day RF at start of UTC day if needed (one global RF for all pairs)
             lock_weekly_rf_if_needed()
@@ -1410,6 +1589,7 @@ def main():
             for p in PAIRS:
                 try:
                     handle_symbol(p)
+                    time.sleep(0.15)
                 except Exception as e:
                     logger.exception(f"{p['symbol']} | Error in handle_symbol: {e}")
 
