@@ -879,12 +879,14 @@ def update_bias_5m():
         age = (now - daily_fvg_state["last_new_buy_fvg"]).total_seconds()
         if age >= 600:  # 30 minutes
             daily_fvg_state["allow_buy"] = False
+            daily_fvg_state["last_new_buy_fvg"] = None
             logger.info("BUY bias expired")
 
     if daily_fvg_state["last_new_sell_fvg"]:
         age = (now - daily_fvg_state["last_new_sell_fvg"]).total_seconds()
         if age >= 600:
             daily_fvg_state["allow_sell"] = False
+            daily_fvg_state["last_new_sell_fvg"] = None
             logger.info("SELL bias expired")
 
     # --------------------------
