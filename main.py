@@ -758,15 +758,22 @@ def set_symbol_leverage(symbol, desired):
 
     lev = min(desired, specs["max_leverage"])
 
-    session.set_leverage(
-        category="linear",
-        symbol=symbol,
-        buyLeverage=str(lev),
-        sellLeverage=str(lev)
-    )
+    try:
+        session.set_leverage(
+            category="linear",
+            symbol=symbol,
+            buyLeverage=str(lev),
+            sellLeverage=str(lev)
+        )
 
-    logger.info(f"{symbol} leverage set to {lev}")
+        logger.info(f"{symbol} leverage set to {lev}")
 
+    except Exception as e:
+
+        if "110043" in str(e):
+            logger.info(f"{symbol} leverage already set to {lev}")
+        else:
+            logger.error(f"{symbol} leverage error: {e}")
 def get_real_balance():
     try:
         resp = session.get_wallet_balance(accountType=ACCOUNT_TYPE)
