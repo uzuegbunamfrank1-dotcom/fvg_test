@@ -599,8 +599,8 @@
 #     main()
 
 
-!/usr/bin/env python3
-make the sl to be the highest or lowest of the mid and deepest touch of confirmed buy and sell
+# !/usr/bin/env python3
+
 """
 LIVE PAPER FVG BOT (simulation only)
 
@@ -1226,10 +1226,11 @@ def handle_symbol(pair):
                 logger.info(f"{symbol} | BUY FVG TAPPED (candle touched the FVG range).")
     if state["buy_fvg"] and state["buy_fvg"]["tapped"]:
         bf = state["buy_fvg"]
-        if bf["deepest_touch"] is None:
-            bf["deepest_touch"] = last_closed["low"]
-        else:
-            bf["deepest_touch"] = min(bf["deepest_touch"], last_closed["low"])
+        if bf["low"] <= last_closed["low"] <= bf["high"]:
+            if bf["deepest_touch"] is None:
+                bf["deepest_touch"] = last_closed["low"]
+            else:
+                bf["deepest_touch"] = min(bf["deepest_touch"], last_closed["low"])
 
     if state["sell_fvg"] and not state["sell_fvg"]["tapped"]:
         sf = state["sell_fvg"]
@@ -1239,10 +1240,11 @@ def handle_symbol(pair):
                 logger.info(f"{symbol} | SELL FVG TAPPED (candle touched the FVG range).")
     if state["sell_fvg"] and state["sell_fvg"]["tapped"]:
         sf = state["sell_fvg"]
-        if sf["deepest_touch"] is None:
-            sf["deepest_touch"] = last_closed["high"]
-        else:
-            sf["deepest_touch"] = max(sf["deepest_touch"], last_closed["high"])
+        if sf["low"] <= last_closed["high"] <= sf["high"]:
+            if sf["deepest_touch"] is None:
+                sf["deepest_touch"] = last_closed["high"]
+            else:
+                sf["deepest_touch"] = max(sf["deepest_touch"], last_closed["high"])
 
     # -----------------------
     # FVG INVALIDATION
@@ -1278,13 +1280,16 @@ def handle_symbol(pair):
             
         if last_closed["close"] > bf["high"]:
             entry = last_closed["close"]
-            structure_low = bf["low"]
             
-            mid = new_low + (new_high - new_low) * 0.5
+            mid = bf["mid"]
+            deep = bf["deepest_touch"]
             
-            risk_sl = mid * (1 - SL_BUFFER)
+            if deep is not None:
+                real_sl = min(mid, deep)
+            else:
+                real_sl = mid
             
-            real_sl = mid
+            risk_sl = real_sl * (1 - SL_BUFFER)
             
             risk_amount = weekly_rf
             raw_qty = risk_amount / abs(entry - risk_sl)
@@ -1386,12 +1391,14 @@ def handle_symbol(pair):
         if last_closed["close"] < sf["low"]:
             entry = last_closed["close"]
             
-            structure_high = sf["high"]
-            mid = new_high - (new_high - new_low) * 0.5
-            
-            risk_sl = mid * (1 + SL_BUFFER)
-            
-            real_sl = mid
+            mid = sf["mid"]
+            deep = sf["deepest_touch"]
+            if deep is not None:
+                real_sl = max(mid, deep)
+            else:
+                real_sl = mid
+                
+            risk_sl = real_sl * (1 + SL_BUFFER)
             
             risk_amount = weekly_rf
             raw_qty = risk_amount / abs(entry - risk_sl)
