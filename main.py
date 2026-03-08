@@ -1154,7 +1154,7 @@ def handle_symbol(pair):
         
         if bf["deepest_touch"] is not None:
             extreme_not_touched = bf["deepest_touch"] > bf["low"]    # did not touch extreme low
-            if not extreme_not_touched
+            if not extreme_not_touched:
                 logger.info(f"{symbol} | BUY ignored: touched extreme")
                 return
 
