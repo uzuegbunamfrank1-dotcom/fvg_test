@@ -780,7 +780,7 @@ def lock_weekly_rf_if_needed():
 def update_daily_bias():
     global daily_fvg_state, last_daily_check
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(timezone.utc)
 
     # Run once per day
     if last_daily_check == today:
@@ -841,8 +841,8 @@ def update_daily_bias():
     candle3 = daily_df.iloc[-4]
     
     
-    buy_fvg_exists = candle3["low"] > candle1["high"]
-    sell_fvg_exists = candle3["high"] < candle1["low"]
+    sell_fvg_exists = candle3["low"] > candle1["high"]
+    buy_fvg_exists = candle3["high"] < candle1["low"]
 
     # -------------------------
     # Update bias flags
@@ -1395,7 +1395,7 @@ def main():
     real_balance = get_real_balance()
     logger.info(f"STARTUP BALANCE = ${real_balance:.4f}")
     # Lock initial daily RF for current UTC day
-    update_daily_bias()
+    # update_daily_bias()
     lock_weekly_rf_if_needed()
 
     try:
