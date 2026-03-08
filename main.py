@@ -923,8 +923,8 @@ def update_bias_5m():
     candle3 = df.iloc[-4]
     
 
-    bull_fvg = candle3["low"] > candle1["high"]
-    bear_fvg = candle3["high"] < candle1["low"]
+    bear_fvg = candle3["low"] > candle1["high"]
+    bull_fvg = candle3["high"] < candle1["low"]
 
     # --------------------------
     # Update bias
