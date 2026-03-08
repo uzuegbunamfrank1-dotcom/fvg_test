@@ -874,14 +874,18 @@ def update_bias_5m():
     now = datetime.now(timezone.utc)
 
     if daily_fvg_state["last_new_buy_fvg"]:
+        logger.info("BUyyyy")
         age = (now - daily_fvg_state["last_new_buy_fvg"]).total_seconds()
         if age >= 1800:  # 30 minutes
+            logger.info("expired")
             daily_fvg_state["allow_buy"] = False
             logger.info("BUY bias expired")
 
     if daily_fvg_state["last_new_sell_fvg"]:
+        logger.info("BUY bias")
         age = (now - daily_fvg_state["last_new_sell_fvg"]).total_seconds()
         if age >= 1800:
+            logger.info("BUY biased")
             daily_fvg_state["allow_sell"] = False
             logger.info("SELL bias expired")
 
@@ -907,6 +911,7 @@ def update_bias_5m():
     } for c in candles])
 
     if len(df) < 3:
+        logger.info("now")
         return
 
     # --------------------------
@@ -1057,7 +1062,6 @@ def handle_symbol(pair):
 
         state["buy_fvg_candle_time"] = prev1["time"]
         if state["buy_trade"] is None:
-            state["buy_fvg"] = {"low": new_low, "high": new_high, "tapped": False, "created_at": created_at}
             logger.info(f"{symbol} | BUY FVG registered as active watcher (no active buy trade).")
         else:
             bt = state["buy_trade"]
@@ -1088,7 +1092,6 @@ def handle_symbol(pair):
 
         state["sell_fvg_candle_time"] = prev1["time"]
         if state["sell_trade"] is None:
-            state["sell_fvg"] = {"high": new_high, "low": new_low, "tapped": False, "created_at": created_at}
             logger.info(f"{symbol} | SELL FVG registered as active watcher (no active sell trade).")
         else:
             st = state["sell_trade"]
@@ -1391,7 +1394,6 @@ def main():
     logger.info(f"STARTUP BALANCE = ${real_balance:.4f}")
     # Lock initial daily RF for current UTC day
     update_daily_bias()
-    update_bias_5m()
     lock_weekly_rf_if_needed()
 
     try:
@@ -1401,6 +1403,8 @@ def main():
             logger.info(f"Waiting {wait}s for next {INTERVAL}m candle close (UTC)...")
             time.sleep(wait + 0.8)  # small offset to ensure candle is closed on exchange
 
+            update_bias_5m()
+            
             # Lock per-day RF at start of UTC day if needed (one global RF for all pairs)
             lock_weekly_rf_if_needed()
 
