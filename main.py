@@ -780,7 +780,7 @@ def lock_weekly_rf_if_needed():
 def update_daily_bias():
     global daily_fvg_state, last_daily_check
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.utcnow()
 
     # Run once per day
     if last_daily_check == today:
