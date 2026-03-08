@@ -599,7 +599,7 @@
 #     main()
 
 
-!/usr/bin/env python3
+# !/usr/bin/env python3
 """
 LIVE PAPER FVG BOT (simulation only)
 
@@ -780,7 +780,7 @@ def lock_weekly_rf_if_needed():
 def update_daily_bias():
     global daily_fvg_state, last_daily_check
 
-    today = datetime.utcnow()
+    today = datetime.now(timezone.utc).date()
 
     # Run once per day
     if last_daily_check == today:
@@ -793,12 +793,14 @@ def update_daily_bias():
     # Expire old FVG permissions
     # -------------------------
     if daily_fvg_state["last_new_buy_fvg"]:
-        if (today - daily_fvg_state["last_new_buy_fvg"]).days >= 2:
+        age_days = (datetime.now(timezone.utc) - daily_fvg_state["last_new_buy_fvg"]).days
+        if age_days >= 2:
             daily_fvg_state["allow_buy"] = False
             logger.info("BUY FVG expired (2 days)")
 
     if daily_fvg_state["last_new_sell_fvg"]:
-        if (today - daily_fvg_state["last_new_sell_fvg"]).days >= 2:
+        age_days = (datetime.now(timezone.utc) - daily_fvg_state["last_new_sell_fvg"]).days
+        if age_days >= 2:
             daily_fvg_state["allow_sell"] = False
             logger.info("SELL FVG expired (2 days)")
 
