@@ -876,18 +876,14 @@ def update_bias_5m():
     now = datetime.now(timezone.utc)
 
     if daily_fvg_state["last_new_buy_fvg"]:
-        logger.info("BUyyyy")
         age = (now - daily_fvg_state["last_new_buy_fvg"]).total_seconds()
-        if age >= 1800:  # 30 minutes
-            logger.info("expired")
+        if age >= 600:  # 30 minutes
             daily_fvg_state["allow_buy"] = False
             logger.info("BUY bias expired")
 
     if daily_fvg_state["last_new_sell_fvg"]:
-        logger.info("BUY bias")
         age = (now - daily_fvg_state["last_new_sell_fvg"]).total_seconds()
-        if age >= 1800:
-            logger.info("BUY biased")
+        if age >= 600:
             daily_fvg_state["allow_sell"] = False
             logger.info("SELL bias expired")
 
@@ -1157,10 +1153,9 @@ def handle_symbol(pair):
         bf = state["buy_fvg"]
         
         if bf["deepest_touch"] is not None:
-            filled_enough = bf["deepest_touch"] <= bf["mid"]         # midpoint penetration
             extreme_not_touched = bf["deepest_touch"] > bf["low"]    # did not touch extreme low
-            if not (filled_enough and extreme_not_touched):
-                logger.info(f"{symbol} | BUY ignored: did not breach midpoint or touched extreme")
+            if not extreme_not_touched
+                logger.info(f"{symbol} | BUY ignored: touched extreme")
                 return
 
         if not daily_fvg_state["allow_buy"]:
@@ -1235,10 +1230,9 @@ def handle_symbol(pair):
 
 
         if sf["deepest_touch"] is not None:
-            filled_enough = sf["deepest_touch"] >= sf["mid"]
             extreme_not_touched = sf["deepest_touch"] < sf["high"]
-            if not (filled_enough and extreme_not_touched):
-                logger.info(f"{symbol} | SELL ignored: did not breach midpoint or touched extreme")
+            if not extreme_not_touched:
+                logger.info(f"{symbol} | SELL ignored: touched extreme")
                 return
 
         if not daily_fvg_state["allow_sell"]:
