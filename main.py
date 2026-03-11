@@ -531,11 +531,13 @@ def calculate_liquidation_price(entry, qty, side, leverage, available_balance):
 # CORE SYMBOL HANDLER
 # ===========================
 def handle_symbol(pair):
-    global balance, weekly_rf, daily_fvg_state
+    global balance, weekly_rf
 
     symbol = pair["symbol"]
     leverage = pair.get("leverage", 1)
     state = symbol_state[symbol]
+    logger.info(f"{symbol} {state}")
+    logger.info(f"{daily_fvg_state[symbol]["allow_buy"]}")
     
     candles = fetch_candles(symbol, interval=INTERVAL, limit=CANDLE_LIMIT)
     if len(candles) < 5:
