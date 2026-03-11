@@ -531,7 +531,7 @@ def calculate_liquidation_price(entry, qty, side, leverage, available_balance):
 # CORE SYMBOL HANDLER
 # ===========================
 def handle_symbol(pair):
-    global balance, weekly_rf
+    global balance, weekly_rf, daily_fvg_state
 
     symbol = pair["symbol"]
     leverage = pair.get("leverage", 1)
