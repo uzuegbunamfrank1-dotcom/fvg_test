@@ -537,7 +537,7 @@ def handle_symbol(pair):
     leverage = pair.get("leverage", 1)
     state = symbol_state[symbol]
     logger.info(f"{symbol} {state}")
-    logger.info(f"{daily_fvg_state[symbol]["allow_buy"]}")
+    logger.info(f"{daily_fvg_state[symbol]['allow_buy']}")
     
     candles = fetch_candles(symbol, interval=INTERVAL, limit=CANDLE_LIMIT)
     if len(candles) < 5:
@@ -681,6 +681,10 @@ def handle_symbol(pair):
     if state["buy_fvg"] and state["buy_fvg"]["tapped"] and state["buy_trade"] is None and last_closed["time"] != state["buy_fvg_candle_time"]:
         bf = state["buy_fvg"]
         
+        if bf["deepest_touch"] is None or bf["deepest_touch"] > bf["mid"]:
+            logger.info(f"{symbol} | BUY ignored: price did not reach FVG mid")
+            return
+        
         if bf["deepest_touch"] is not None:
             extreme_not_touched = bf["deepest_touch"] > bf["low"]    # did not touch extreme low
             if not extreme_not_touched:
@@ -694,13 +698,12 @@ def handle_symbol(pair):
         if last_closed["close"] > bf["high"]:
             entry = last_closed["close"]
             
-            mid = bf["mid"]
             deep = bf["deepest_touch"]
             
-            if deep is not None:
-                real_sl = min(mid, deep)
-            else:
-                real_sl = mid
+            if deep is None:
+                logger.info(f"{symbol} | BUY ignored: no deepest touch recorded")
+                return
+            real_sl = deep * (1 - SL_BUFFER)
             
             risk_sl = real_sl * (1 - SL_BUFFER)
             
@@ -789,6 +792,10 @@ def handle_symbol(pair):
     # SELL confirmation
     if state["sell_fvg"] and state["sell_fvg"]["tapped"] and state["sell_trade"] is None and last_closed["time"] != state["sell_fvg_candle_time"]:
         sf = state["sell_fvg"]
+        
+        if sf["deepest_touch"] is None or sf["deepest_touch"] < sf["mid"]:
+            logger.info(f"{symbol} | SELL ignored: price did not reach FVG mid")
+            return
 
 
         if sf["deepest_touch"] is not None:
@@ -804,12 +811,13 @@ def handle_symbol(pair):
         if last_closed["close"] < sf["low"]:
             entry = last_closed["close"]
             
-            mid = sf["mid"]
             deep = sf["deepest_touch"]
-            if deep is not None:
-                real_sl = max(mid, deep)
-            else:
-                real_sl = mid
+            
+            if deep is None:
+                logger.info(f"{symbol} | SELL ignored: no deepest touch recorded")
+                return
+                
+            real_sl = deep * (1 + SL_BUFFER)
                 
             risk_sl = real_sl * (1 + SL_BUFFER)
             
