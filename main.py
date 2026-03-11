@@ -16,7 +16,7 @@ Notes:
 import os
 import time
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pybit.unified_trading import HTTP
 import pandas as pd
 import math
@@ -236,34 +236,52 @@ def lock_weekly_rf_if_needed():
 def update_daily_bias(symbol):
     global daily_fvg_state, last_daily_check
 
-    today = datetime.now(timezone.utc)
+    utc_plus_1 = timezone(timedelta(hours=1))
+    now = datetime.now(utc_plus_1)
+    today = now.date()
 
-    # Run once per day
+    # -------------------------
+    # FIRST STARTUP RUN
+    # -------------------------
+    if last_daily_check[symbol] is None:
+        logger.info(f"{symbol} | First startup daily bias scan")
+        run_daily_fvg_scan(symbol, today)
+        last_daily_check[symbol] = today
+        return
+
+    # -------------------------
+    # ONLY RUN AT 01:00
+    # -------------------------
+    if not (now.hour == 1 and now.minute < 5):
+        return
+
+    # -------------------------
+    # RUN ONCE PER DAY
+    # -------------------------
     if last_daily_check[symbol] == today:
         return
-        
-    last_daily_check[symbol] = today
-    
-    logger.info("Running daily FVG scan...")
 
-    # -------------------------
-    # Expire old FVG permissions
-    # -------------------------
+    logger.info(f"{symbol} | Running scheduled daily bias scan")
+
+    run_daily_fvg_scan(symbol, today)
+
+    last_daily_check[symbol] = today
+
+def run_daily_fvg_scan(symbol, today):
+
+    # Expire old permissions
     if daily_fvg_state[symbol]["last_new_buy_fvg"]:
-        age_days = (datetime.now(timezone.utc) - daily_fvg_state[symbol]["last_new_buy_fvg"]).days
+        age_days = (today - daily_fvg_state[symbol]["last_new_buy_fvg"]).days
         if age_days >= 2:
             daily_fvg_state[symbol]["allow_buy"] = False
             logger.info(f"{symbol} BUY FVG expired (2 days)")
 
     if daily_fvg_state[symbol]["last_new_sell_fvg"]:
-        age_days = (datetime.now(timezone.utc) - daily_fvg_state[symbol]["last_new_sell_fvg"]).days
+        age_days = (today - daily_fvg_state[symbol]["last_new_sell_fvg"]).days
         if age_days >= 2:
             daily_fvg_state[symbol]["allow_sell"] = False
             logger.info(f"{symbol} SELL FVG expired (2 days)")
 
-    # -------------------------
-    # Get daily candles
-    # -------------------------
     resp = session.get_kline(
         category="linear",
         symbol=symbol,
@@ -274,8 +292,7 @@ def update_daily_bias(symbol):
     raw = resp["result"]["list"]
     candles = list(reversed(raw))
 
-    # Convert to dataframe
-    daily_df = pd.DataFrame([{
+    df = pd.DataFrame([{
         "time": int(c[0]),
         "open": float(c[1]),
         "high": float(c[2]),
@@ -283,45 +300,25 @@ def update_daily_bias(symbol):
         "close": float(c[4])
     } for c in candles])
 
-    # Add datetime column
-    daily_df["datetime"] = pd.to_datetime(daily_df["time"], unit="ms")
-    daily_df["date"] = daily_df["datetime"].dt.date
-
-    if len(daily_df) < 3:
+    if len(df) < 4:
         return
 
-    # -------------------------
-    # Correct FVG candle logic
-    # -------------------------
+    c1 = df.iloc[-4]
+    c3 = df.iloc[-2]
 
-    candle1 = daily_df.iloc[-2]
-    candle3 = daily_df.iloc[-4]
-    
-    
-    sell_fvg_exists = candle3["low"] > candle1["high"]
-    buy_fvg_exists = candle3["high"] < candle1["low"]
+    sell_fvg_exists = c1["low"] > c3["high"]
+    buy_fvg_exists = c1["high"] < c3["low"]
 
-    # -------------------------
-    # Update bias flags
-    # -------------------------
     if buy_fvg_exists:
         daily_fvg_state[symbol]["allow_buy"] = True
         daily_fvg_state[symbol]["last_new_buy_fvg"] = today
-        logger.info(f"{symbol} Daily BUY FVG detected -> allow_buy = TRUE")
+        logger.info(f"{symbol} Daily BUY FVG detected")
 
     if sell_fvg_exists:
         daily_fvg_state[symbol]["allow_sell"] = True
         daily_fvg_state[symbol]["last_new_sell_fvg"] = today
-        logger.info(f"{symbol} Daily SELL FVG detected -> allow_sell = TRUE")
-
-    # -------------------------
-    # Debug logging
-    # -------------------------
-    logger.info(f"{symbol} DAILY FVG CHECK")
-    
-    logger.info(f"{symbol}|C1 H:{candle1['high']} L:{candle1['low']}")
-    logger.info(f"{symbol}|C3 H:{candle3['high']} L:{candle3['low']}")
-
+        logger.info(f"{symbol} Daily SELL FVG detected")
+        
 def update_bias_5m():
     global daily_fvg_state
 
