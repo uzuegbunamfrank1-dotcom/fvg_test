@@ -334,9 +334,14 @@ def run_daily_fvg_scan(symbol, today):
 
     c1 = df.iloc[-4]
     c3 = df.iloc[-2]
+    c2 = df.iloc[-5]
+    c4 = df.iloc[-3]
 
     sell_fvg_exists = c1["low"] > c3["high"]
     buy_fvg_exists = c1["high"] < c3["low"]
+
+    prev_day_sell_fvg_exists = c2["low"] > c4["high"]
+    prev_day_buy_fvg_exists = c2["high"] < c4["low"]
 
     if buy_fvg_exists:
         daily_fvg_state[symbol]["allow_buy"] = True
@@ -347,6 +352,16 @@ def run_daily_fvg_scan(symbol, today):
         daily_fvg_state[symbol]["allow_sell"] = True
         daily_fvg_state[symbol]["last_new_sell_fvg"] = today
         logger.info(f"{symbol} Daily SELL FVG detected")
+        
+    if prev_day_buy_fvg_exists:
+        daily_fvg_state[symbol]["allow_buy"] = True
+        daily_fvg_state[symbol]["last_new_buy_fvg"] = today
+        logger.info(f"{symbol} Previous Day Daily BUY FVG detected")
+
+    if prev_day_sell_fvg_exists:
+        daily_fvg_state[symbol]["allow_sell"] = True
+        daily_fvg_state[symbol]["last_new_sell_fvg"] = today
+        logger.info(f"{symbol} Previous Day Daily SELL FVG detected")
             
 def log_candles(symbol, candles):
     logger.info(f"{symbol} | Retrieved {len(candles)} candles (oldest -> newest).")
