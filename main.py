@@ -87,6 +87,14 @@ siphoned_cash = 0.0
 session = HTTP(testnet=TESTNET, api_key=API_KEY, api_secret=API_SECRET)
 
 symbol_state = {}
+
+account_cache = {
+    "positions": [],
+    "wallet_balance": 0.0,
+    "used_margin": 0.0,
+    "last_update": None
+}
+
 for p in PAIRS:
     symbol_state[p["symbol"]] = {
         "buy_fvg": None,
@@ -155,6 +163,7 @@ def get_symbol_specs(symbol):
     symbol_specs[symbol] = specs
     return specs
 
+
 def set_symbol_leverage(symbol, desired):
 
     specs = get_symbol_specs(symbol)
@@ -190,22 +199,18 @@ def get_real_balance():
 
 
 def position_exists(symbol, side):
-    response = session.get_positions(
-        category="linear",
-        symbol=symbol
-    )
 
-    positions = response["result"]["list"]
+    for pos in account_cache["positions"]:
 
-    for pos in positions:
-        size = float(pos["size"])
-        position_side = pos["side"]  # "Buy" or "Sell"
+        if pos["symbol"] == symbol:
+            size = float(pos["size"])
+            pos_side = pos["side"]
 
-        if size > 0 and position_side == side:
-            return True
+            if size > 0 and pos_side == side:
+                return True
 
     return False
-
+    
 def lock_weekly_rf_if_needed():
     global current_week, weekly_rf, siphoned_cash
 
@@ -233,6 +238,30 @@ def lock_weekly_rf_if_needed():
         logger.info(f"LOCKED WEEKLY RF: ${weekly_rf:.4f}")
         logger.info("===========================================")
 
+def refresh_account_cache():
+    global account_cache
+
+    try:
+        # Positions
+        pos_resp = session.get_positions(
+            category="linear",
+            settleCoin="USDT"
+        )
+
+        account_cache["positions"] = pos_resp["result"]["list"]
+
+        # Wallet / margin
+        wallet = session.get_wallet_balance(accountType="UNIFIED")
+        data = wallet["result"]["list"][0]
+
+        account_cache["wallet_balance"] = float(data["totalEquity"])
+        account_cache["used_margin"] = float(data["totalInitialMargin"])
+
+        account_cache["last_update"] = datetime.now(timezone.utc)
+
+    except Exception as e:
+        logger.error(f"Account cache refresh failed: {e}")
+        
 def update_daily_bias(symbol):
     global daily_fvg_state, last_daily_check
 
@@ -318,83 +347,7 @@ def run_daily_fvg_scan(symbol, today):
         daily_fvg_state[symbol]["allow_sell"] = True
         daily_fvg_state[symbol]["last_new_sell_fvg"] = today
         logger.info(f"{symbol} Daily SELL FVG detected")
-        
-def update_bias_5m():
-    global daily_fvg_state
-
-    logger.info("Running 5m bias scan...")
-
-    # --------------------------
-    # Expire bias after 30 minutes (testing)
-    # --------------------------
-    now = datetime.now(timezone.utc)
-
-    if daily_fvg_state[symbol]["last_new_buy_fvg"]:
-        age = (now - daily_fvg_state[symbol]["last_new_buy_fvg"]).total_seconds()
-        if age >= 600:  # 30 minutes
-            daily_fvg_state[symbol]["allow_buy"] = False
-            daily_fvg_state[symbol]["last_new_buy_fvg"] = None
-            logger.info("BUY bias expired")
-
-    if daily_fvg_state[symbol]["last_new_sell_fvg"]:
-        age = (now - daily_fvg_state[symbol]["last_new_sell_fvg"]).total_seconds()
-        if age >= 600:
-            daily_fvg_state[symbol]["allow_sell"] = False
-            daily_fvg_state[symbol]["last_new_sell_fvg"] = None
-            logger.info("SELL bias expired")
-
-    # --------------------------
-    # Get 5m candles
-    # --------------------------
-    resp = session.get_kline(
-        category="linear",
-        symbol="BTCUSDT",
-        interval="5",
-        limit=6
-    )
-
-    raw = resp["result"]["list"]
-    candles = list(reversed(raw))
-
-    df = pd.DataFrame([{
-        "time": int(c[0]),
-        "open": float(c[1]),
-        "high": float(c[2]),
-        "low": float(c[3]),
-        "close": float(c[4])
-    } for c in candles])
-
-    if len(df) < 3:
-        logger.info("now")
-        return
-
-    # --------------------------
-    # FVG calculation
-    # --------------------------
-    candle1 = df.iloc[-2]
-    candle3 = df.iloc[-4]
-    
-
-    bear_fvg = candle3["low"] > candle1["high"]
-    bull_fvg = candle3["high"] < candle1["low"]
-
-    # --------------------------
-    # Update bias
-    # --------------------------
-    if bull_fvg:
-        daily_fvg_state[symbol]["allow_buy"] = True
-        daily_fvg_state[symbol]["last_new_buy_fvg"] = datetime.now(timezone.utc)
-        logger.info("5m BUY FVG detected -> allow_buy = TRUE")
-
-    if bear_fvg:
-        daily_fvg_state[symbol]["allow_sell"] = True
-        daily_fvg_state[symbol]["last_new_sell_fvg"] = datetime.now(timezone.utc)
-        logger.info("5m SELL FVG detected -> allow_sell = TRUE")
-
-    logger.info("5M FVG CHECK")
-    logger.info(f"C1 H:{candle1['high']} L:{candle1['low']}")
-    logger.info(f"C3 H:{candle3['high']} L:{candle3['low']}")
-    
+            
 def log_candles(symbol, candles):
     logger.info(f"{symbol} | Retrieved {len(candles)} candles (oldest -> newest).")
     for c in candles:
@@ -413,16 +366,10 @@ def round_qty(symbol, qty):
     return qty    
 
 def get_margin_usage():
-
-    resp = session.get_wallet_balance(accountType="UNIFIED")
-
-    data = resp["result"]["list"][0]
-
-    total = float(data["totalEquity"])
-    used = float(data["totalInitialMargin"])
-
+    total = account_cache["wallet_balance"]
+    used = account_cache["used_margin"]
     return total, used
-
+    
 def margin_available_for_trade(required_margin):
 
     total, used = get_margin_usage()
@@ -475,18 +422,14 @@ def fit_qty_to_margin(symbol, price, leverage, desired_qty):
 
 def get_total_open_positions():
 
-    resp = session.get_positions(category="linear")
-
-    positions = resp["result"]["list"]
-
     count = 0
 
-    for p in positions:
-        if float(p["size"]) > 0:
+    for pos in account_cache["positions"]:
+        if float(pos["size"]) > 0:
             count += 1
 
     return count
-
+    
 def simulate_and_resolve_trade(symbol, side, entry_index, entry, sl, tp, candles):
     for j in range(entry_index + 1, len(candles)):
         high = candles[j]["high"]
@@ -533,8 +476,6 @@ def handle_symbol(pair):
     symbol = pair["symbol"]
     leverage = pair.get("leverage", 1)
     state = symbol_state[symbol]
-    logger.info(f"{symbol} {state}")
-    logger.info(f"{daily_fvg_state[symbol]['allow_buy']}")
     
     candles = fetch_candles(symbol, interval=INTERVAL, limit=CANDLE_LIMIT)
     if len(candles) < 5:
@@ -977,6 +918,8 @@ def place_real_trade(symbol, side, entry, sl, tp, leverage, frozen_risk, qty):
             stopLoss=str(sl),
             positionIdx=position_idx
         )
+        
+        refresh_account_cache()
 
         logger.info(f"{symbol} | REAL {side} ORDER PLACED | TP={tp} SL={sl}")
 
@@ -992,7 +935,10 @@ def main():
     logger.info(f"STARTUP BALANCE = ${real_balance:.4f}")
     # Lock initial daily RF for current UTC day
     # update_daily_bias()
-
+    
+    for p in PAIRS:
+        get_symbol_specs(p["symbol"])
+        
     for p in PAIRS:
         set_symbol_leverage(p["symbol"], p["leverage"])
         
@@ -1005,6 +951,8 @@ def main():
             logger.info(f"Waiting {wait}s for next {INTERVAL}m candle close (UTC)...")
             time.sleep(wait + 0.8)  # small offset to ensure candle is closed on exchange
 
+            refresh_account_cache()
+            
             for p in PAIRS:
                 update_daily_bias(p["symbol"])
             
