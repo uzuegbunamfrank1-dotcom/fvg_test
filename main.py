@@ -298,6 +298,8 @@ def update_daily_bias(symbol):
 
 def run_daily_fvg_scan(symbol, today):
 
+    yesterday = today - timedelta(days=1)
+    
     # Expire old permissions
     if daily_fvg_state[symbol]["last_new_buy_fvg"]:
         age_days = (today - daily_fvg_state[symbol]["last_new_buy_fvg"]).days
@@ -355,12 +357,12 @@ def run_daily_fvg_scan(symbol, today):
         
     if prev_day_buy_fvg_exists:
         daily_fvg_state[symbol]["allow_buy"] = True
-        daily_fvg_state[symbol]["last_new_buy_fvg"] = today
+        daily_fvg_state[symbol]["last_new_buy_fvg"] = yesterday
         logger.info(f"{symbol} Previous Day Daily BUY FVG detected")
 
     if prev_day_sell_fvg_exists:
         daily_fvg_state[symbol]["allow_sell"] = True
-        daily_fvg_state[symbol]["last_new_sell_fvg"] = today
+        daily_fvg_state[symbol]["last_new_sell_fvg"] = yesterday
         logger.info(f"{symbol} Previous Day Daily SELL FVG detected")
             
 def log_candles(symbol, candles):
