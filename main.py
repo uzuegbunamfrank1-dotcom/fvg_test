@@ -910,7 +910,7 @@ def handle_symbol(pair):
                     logger.info(f"{symbol} BUY signal queued | score={score:.4f}")
 
                 else:
-                     signal_queue.append({
+                    signal_queue.append({
                         "symbol": symbol,
                         "side": "BUY",
                         "entry": entry,
@@ -1147,6 +1147,9 @@ def main():
     # update_daily_bias()
 
     refresh_symbol_universe_if_needed()
+
+    for p in PAIRS:
+        logger.info(f"Symbol loaded: {p['symbol']} | leverage: {p['leverage']}")
     
     for p in PAIRS:
         get_symbol_specs(p["symbol"])
@@ -1179,6 +1182,7 @@ def main():
             for p in PAIRS:
                 sym = p["symbol"]
                 if daily_fvg_state[sym]["allow_buy"] or daily_fvg_state[sym]["allow_sell"]:
+                    logger.info(f"{symbol} | Daily bias: buy={daily_fvg_state[symbol]['allow_buy']}, sell={daily_fvg_state[symbol]['allow_sell']}")
                     eligible_pairs.append(p)
             logger.info(f"Scanning {len(eligible_pairs)} eligible symbols out of {len(PAIRS)}")
             
