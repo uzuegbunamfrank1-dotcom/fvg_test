@@ -47,6 +47,8 @@ ACCOUNT_TYPE = "UNIFIED"
 CATEGORY = "linear"
 RF_PERCENT = 0.05
 
+leverage_set = {}
+
 last_daily_check = {}
 daily_fvg_state = {}
 
@@ -248,11 +250,14 @@ def refresh_symbol_universe_if_needed():
     logger.info(f"Loaded {len(PAIRS)} top symbols")
 
 
+
 def set_symbol_leverage(symbol, desired):
 
     specs = get_symbol_specs(symbol)
 
     lev = specs["max_leverage"]
+    if leverage_set.get(symbol):
+        return
 
     try:
         session.set_leverage(
@@ -263,6 +268,7 @@ def set_symbol_leverage(symbol, desired):
         )
 
         logger.info(f"{symbol} leverage set to {lev}")
+        leverage_set[symbol] = True
 
     except Exception as e:
 
@@ -377,7 +383,7 @@ def refresh_account_cache():
 
     except Exception as e:
         logger.error(f"Account cache refresh failed: {e}")
-        
+        llllllllllll
 def update_daily_bias(symbol):
     global daily_fvg_state, last_daily_check
 
