@@ -24,18 +24,7 @@ import math
 # ===========================
 # CONFIG (CHANGE AS NEEDED)
 # ===========================
-PAIRS = [
-    {"symbol": "ARBUSDT", "leverage": 50},
-    {"symbol": "APTUSDT", "leverage": 50},
-    {"symbol": "LINKUSDT", "leverage": 50},
-    {"symbol": "AVAXUSDT", "leverage": 50},
-    {"symbol": "BNBUSDT", "leverage": 50},
-    {"symbol": "DOGEUSDT", "leverage": 75},
-    {"symbol": "SUIUSDT", "leverage": 50},
-    {"symbol": "BTCUSDT", "leverage": 100},
-    {"symbol": "ETHUSDT", "leverage": 100},
-    {"symbol": "SOLUSDT", "leverage": 100},
-]
+PAIRS = []
 symbol_specs = {}
 
 INTERVAL = "30"
@@ -43,7 +32,7 @@ CANDLE_LIMIT = 6
 LOG_LEVEL = logging.INFO
 
 START_BALANCE = 100.0
-DAILY_RISK_PCT = 0.1
+DAILY_RISK_PCT = 0.05
 RR = 2
 MIN_SL_PCT = 0.001
 TP_BUFFER = 0.001
@@ -53,10 +42,10 @@ API_KEY = os.getenv("BYBIT_API_KEY", "")
 API_SECRET = os.getenv("BYBIT_API_SECRET", "")
 TESTNET = False
 
-USE_REAL_TRADING = True
+USE_REAL_TRADING = False
 ACCOUNT_TYPE = "UNIFIED"
 CATEGORY = "linear"
-RF_PERCENT = 0.1
+RF_PERCENT = 0.05
 
 last_daily_check = {}
 daily_fvg_state = {}
@@ -69,6 +58,15 @@ for p in PAIRS:
         "last_new_buy_fvg": None,
         "last_new_sell_fvg": None
     }
+
+MAX_SYMBOLS = 50          # number of pairs to scan
+MAX_ACTIVE_TRADES = 10    # maximum open positions
+DEFAULT_LEVERAGE = 50
+
+last_symbol_refresh_week = None
+
+signal_queue = []
+
     
 # ===========================
 # LOGGING & STATE
@@ -163,12 +161,98 @@ def get_symbol_specs(symbol):
     symbol_specs[symbol] = specs
     return specs
 
+def fetch_top_symbols():
+
+    resp = session.get_tickers(category="linear")
+    tickers = resp["result"]["list"]
+
+    symbols = []
+
+    for t in tickers:
+
+        sym = t["symbol"]
+
+        if not sym.endswith("USDT"):
+            continue
+
+        vol = float(t["turnover24h"])
+
+        symbols.append({
+            "symbol": sym,
+            "volume": vol
+        })
+
+    # rank by volume
+    symbols.sort(key=lambda x: x["volume"], reverse=True)
+
+    selected = symbols[:MAX_SYMBOLS]
+
+    pairs = []
+
+    for s in selected:
+        pairs.append({
+            "symbol": s["symbol"],
+            "leverage": DEFAULT_LEVERAGE
+        })
+
+    return pairs
+
+def refresh_symbol_universe_if_needed():
+
+    global PAIRS, symbol_state, daily_fvg_state, last_daily_check, last_symbol_refresh_week
+
+    now = datetime.now(timezone.utc)
+    week = (now.year, now.isocalendar()[1])
+
+    if week == last_symbol_refresh_week:
+        return
+
+    logger.info("Refreshing symbol universe using 24h volume")
+
+    new_pairs = fetch_top_symbols()
+
+    PAIRS = new_pairs
+
+    symbol_state.clear()
+    daily_fvg_state.clear()
+    last_daily_check.clear()
+
+
+    for p in PAIRS:
+
+        sym = p["symbol"]
+
+        if sym not in symbol_state:
+
+            symbol_state[sym] = {
+                "buy_fvg": None,
+                "sell_fvg": None,
+                "buy_trade": None,
+                "sell_trade": None,
+                "last_candle_time": 0,
+                "buy_fvg_candle_time": None,
+                "sell_fvg_candle_time": None,
+            }
+
+            daily_fvg_state[sym] = {
+                "allow_buy": False,
+                "allow_sell": False,
+                "last_new_buy_fvg": None,
+                "last_new_sell_fvg": None
+            }
+
+            last_daily_check[sym] = None
+
+    last_symbol_refresh_week = week
+
+    logger.info(f"Loaded {len(PAIRS)} top symbols")
+
 
 def set_symbol_leverage(symbol, desired):
 
     specs = get_symbol_specs(symbol)
 
-    lev = min(desired, specs["max_leverage"])
+    lev = specs["max_leverage"]
 
     try:
         session.set_leverage(
@@ -186,6 +270,26 @@ def set_symbol_leverage(symbol, desired):
             logger.info(f"{symbol} leverage already set to {lev}")
         else:
             logger.error(f"{symbol} leverage error: {e}")
+
+def ensure_hedge_mode():
+
+    try:
+
+        session.switch_position_mode(
+            category="linear",
+            coin="USDT",
+            mode=3
+        )
+
+        logger.info("Hedge mode enabled")
+
+    except Exception as e:
+
+        if "110025" in str(e):
+            logger.info("Hedge mode already enabled")
+        else:
+            logger.error(f"Hedge mode error: {e}")
+
 def get_real_balance():
     try:
         resp = session.get_wallet_balance(accountType=ACCOUNT_TYPE)
@@ -196,6 +300,18 @@ def get_real_balance():
     except Exception as e:
         logger.error(f"Error fetching balance: {e}")
     return 0.0
+
+def calculate_signal_score(entry, fvg_low, fvg_high):
+
+    fvg_size = abs(fvg_high - fvg_low)
+
+    # normalize to price so large coins don't dominate
+    size_ratio = fvg_size / entry
+
+    # bigger gap = stronger imbalance
+    score = size_ratio * 1000
+
+    return score
 
 
 def position_exists(symbol, side):
@@ -295,6 +411,49 @@ def update_daily_bias(symbol):
     run_daily_fvg_scan(symbol, today)
 
     last_daily_check[symbol] = today
+
+def process_signal_queue():
+
+    global signal_queue
+
+    if len(signal_queue) == 0:
+        return
+
+    # sort strongest first
+    signal_queue.sort(key=lambda x: x["score"], reverse=True)
+
+    open_positions = get_total_open_positions()
+    slots_left = MAX_ACTIVE_TRADES - open_positions
+
+    if slots_left <= 0:
+        signal_queue = []
+        return
+
+    selected = signal_queue[:slots_left]
+
+    for sig in selected:
+
+        symbol = sig["symbol"]
+        side = sig["side"]
+        entry = sig["entry"]
+        sl = sig["sl"]
+        tp = sig["tp"]
+        leverage = sig["leverage"]
+        qty = sig["qty"]
+
+        place_real_trade(
+            symbol,
+            side,
+            entry,
+            sl,
+            tp,
+            leverage,
+            weekly_rf,
+            qty
+        )
+
+    signal_queue = []
+
 
 def run_daily_fvg_scan(symbol, today):
 
@@ -541,7 +700,7 @@ def handle_symbol(pair):
         logger.info(f"{symbol} | New BUY FVG detected: low={new_low} high={new_high}")
 
         state["buy_fvg_candle_time"] = prev1["time"]
-        if state["buy_trade"] is None:
+        if not position_exists(symbol, "Buy"):
             logger.info(f"{symbol} | BUY FVG registered as active watcher (no active buy trade).")
         else:
             bt = state["buy_trade"]
@@ -571,7 +730,7 @@ def handle_symbol(pair):
         logger.info(f"{symbol} | New SELL FVG detected: high={new_high} low={new_low}")
 
         state["sell_fvg_candle_time"] = prev1["time"]
-        if state["sell_trade"] is None:
+        if not position_exists(symbol, "Sell"):
             logger.info(f"{symbol} | SELL FVG registered as active watcher (no active sell trade).")
         else:
             st = state["sell_trade"]
@@ -633,7 +792,7 @@ def handle_symbol(pair):
     # CONFIRMATION (OPEN PAPER/REAL TRADE)
     # -----------------------
     # BUY confirmation
-    if state["buy_fvg"] and state["buy_fvg"]["tapped"] and state["buy_trade"] is None and last_closed["time"] != state["buy_fvg_candle_time"]:
+    if state["buy_fvg"] and state["buy_fvg"]["tapped"] and not position_exists(symbol, "Buy") and last_closed["time"] != state["buy_fvg_candle_time"]:
         bf = state["buy_fvg"]
         
         if bf["deepest_touch"] is None or bf["deepest_touch"] > bf["mid"]:
@@ -737,15 +896,35 @@ def handle_symbol(pair):
                     if distance_to_lp_pct < 0.003:  # 0.1%
                         logger.info(f"{symbol} | Skipping BUY - SL too close to liquidation ({distance_to_lp_pct*100:.3f}%)")
                         return
-                    place_real_trade(symbol, "BUY", entry, sl, tp, leverage, weekly_rf,qty)
+                    score = calculate_signal_score(entry, bf["low"], bf["high"])
+                    
+                    signal_queue.append({
+                        "symbol": symbol,
+                        "side": "BUY",
+                        "entry": entry,
+                        "sl": sl,
+                        "tp": tp,
+                        "score": score,
+                        "qty": qty,
+                        "leverage": leverage})
+                    logger.info(f"{symbol} BUY signal queued | score={score:.4f}")
+
                 else:
-                    state["buy_trade"] = {"side": "BUY","entry": entry,"sl": sl,"tp": tp,"opened_at": last_closed["time"]}
-                    logger.info(f"{symbol} | BUY CONFIRMED (paper only)")
+                     signal_queue.append({
+                        "symbol": symbol,
+                        "side": "BUY",
+                        "entry": entry,
+                        "sl": sl,
+                        "tp": tp,
+                        "score": score,
+                         "qty": qty,
+                        "leverage": leverage})
+                    logger.info(f"{symbol} BUY signal queued | score={score:.4f}")
             else:
                 logger.info(f"{symbol} | BUY confirmation ignored: SL too tight")
 
     # SELL confirmation
-    if state["sell_fvg"] and state["sell_fvg"]["tapped"] and state["sell_trade"] is None and last_closed["time"] != state["sell_fvg_candle_time"]:
+    if state["sell_fvg"] and state["sell_fvg"]["tapped"] and not position_exists(symbol, "Sell") and last_closed["time"] != state["sell_fvg_candle_time"]:
         sf = state["sell_fvg"]
         
         if sf["deepest_touch"] is None or sf["deepest_touch"] < sf["mid"]:
@@ -851,10 +1030,30 @@ def handle_symbol(pair):
                     if distance_to_lp_pct < 0.003:
                         logger.info(f"{symbol} | Skipping SELL - SL too close to liquidation ({distance_to_lp_pct*100:.3f}%)")
                         return
-                    place_real_trade(symbol, "SELL", entry, sl, tp, leverage, weekly_rf, qty)
+                    score = calculate_signal_score(entry, sf["low"], sf["high"])
+                    
+                    signal_queue.append({
+                        "symbol": symbol,
+                        "side": "SELL",
+                        "entry": entry,
+                        "sl": sl,
+                        "tp": tp,
+                        "score": score,
+                        "qty": qty,
+                        "leverage": leverage})
+                    logger.info(f"{symbol} SELL signal queued | score={score:.4f}")
+
                 else:
-                    state["sell_trade"] = {"side": "SELL","entry": entry,"sl": sl,"tp": tp,"opened_at": last_closed["time"]}
-                    logger.info(f"{symbol} | SELL CONFIRMED (paper only)")
+                    signal_queue.append({
+                        "symbol": symbol,
+                        "side": "SELL",
+                        "entry": entry,
+                        "sl": sl,
+                        "tp": tp,
+                        "score": score,
+                        "qty": qty,
+                        "leverage": leverage})
+                    logger.info(f"{symbol} SELL signal queued | score={score:.4f}")
             else:
                 logger.info(f"{symbol} | SELL confirmation ignored: SL too tight")
     
@@ -862,12 +1061,10 @@ def place_real_trade(symbol, side, entry, sl, tp, leverage, frozen_risk, qty):
 
     side = side.upper()
 
-    # ----------------------------
-    # Determine side + positionIdx
-    # ----------------------------
-    if get_total_open_positions() >= 5:
-        logger.info("Max 5 open trades reached. Skipping.")
+    if get_total_open_positions() >= MAX_ACTIVE_TRADES:
+        logger.info(f"Max {MAX_ACTIVE_TRADES} open trades reached. Skipping.")
         return
+
     if side == "BUY":
         order_side = "Buy"
         position_idx = 1
@@ -878,16 +1075,10 @@ def place_real_trade(symbol, side, entry, sl, tp, leverage, frozen_risk, qty):
         logger.error(f"{symbol} | Invalid side: {side}")
         return
 
-    # ----------------------------
-    # Check if SAME DIRECTION exists
-    # ----------------------------
     if position_exists(symbol, order_side):
         logger.info(f"{symbol} | {side} position already exists. Skipping.")
         return
 
-    # ----------------------------
-    # Validate risk
-    # ----------------------------
     if frozen_risk <= 0:
         logger.warning(f"{symbol} | Frozen risk is zero. Skipping trade.")
         return
@@ -899,20 +1090,24 @@ def place_real_trade(symbol, side, entry, sl, tp, leverage, frozen_risk, qty):
             logger.warning(f"{symbol} | SL distance zero. Aborting.")
             return
 
-        # Apply buffer ONLY to position sizing
-        extra_buffer_distance = entry * SL_BUFFER
-        buffered_sl_distance = sl_distance + extra_buffer_distance
-
         if qty <= 0:
-            logger.warning(f"{symbol} | Calculated qty invalid ({qty}). Aborting.")
+            logger.warning(f"{symbol} | Invalid qty ({qty}). Aborting.")
             return
 
         logger.info(f"{symbol} | Frozen Risk: ${frozen_risk:.4f}")
-        logger.info(f"{symbol} | Qty Calculated: {qty}")
-        
-        # ----------------------------
-        # PLACE MARKET ORDER
-        # ----------------------------
+        logger.info(f"{symbol} | Qty: {qty}")
+
+        # =============================
+        # SIMULATION MODE
+        # =============================
+        if not USE_REAL_TRADING:
+            logger.info(f"[SIMULATED] {symbol} {side} | entry={entry} sl={sl} tp={tp} qty={qty}")
+            refresh_account_cache()
+            return
+
+        # =============================
+        # REAL EXECUTION
+        # =============================
         order_response = session.place_order(
             category=CATEGORY,
             symbol=symbol,
@@ -925,9 +1120,6 @@ def place_real_trade(symbol, side, entry, sl, tp, leverage, frozen_risk, qty):
 
         logger.info(f"{symbol} | Order response: {order_response}")
 
-        # ----------------------------
-        # SET TP/SL FOR THAT SIDE ONLY
-        # ----------------------------
         session.set_trading_stop(
             category=CATEGORY,
             symbol=symbol,
@@ -935,14 +1127,13 @@ def place_real_trade(symbol, side, entry, sl, tp, leverage, frozen_risk, qty):
             stopLoss=str(sl),
             positionIdx=position_idx
         )
-        
+
         refresh_account_cache()
 
         logger.info(f"{symbol} | REAL {side} ORDER PLACED | TP={tp} SL={sl}")
 
     except Exception as e:
-        logger.error(f"{symbol} | Order error: {e}")# ===========================
-# MAIN LOOP
+        logger.error(f"{symbol} | Order error: {e}")# MAIN LOOP
 # ===========================
 def main():
     global balance, daily_rf
@@ -950,8 +1141,12 @@ def main():
     logger.info("LIVE PAPER FVG BOT (simulation) STARTED")
     real_balance = get_real_balance()
     logger.info(f"STARTUP BALANCE = ${real_balance:.4f}")
+    refresh_account_cache()
+    ensure_hedge_mode()
     # Lock initial daily RF for current UTC day
     # update_daily_bias()
+
+    refresh_symbol_universe_if_needed()
     
     for p in PAIRS:
         get_symbol_specs(p["symbol"])
@@ -963,6 +1158,8 @@ def main():
 
     try:
         while True:
+            refresh_symbol_universe_if_needed()
+            
             # wait until next candle close (UTC)
             wait = seconds_until_next_candle(INTERVAL)
             logger.info(f"Waiting {wait}s for next {INTERVAL}m candle close (UTC)...")
@@ -977,13 +1174,25 @@ def main():
             lock_weekly_rf_if_needed()
 
             # Process each pair independently
+            eligible_pairs = []
+            
             for p in PAIRS:
+                sym = p["symbol"]
+                if daily_fvg_state[sym]["allow_buy"] or daily_fvg_state[sym]["allow_sell"]:
+                    eligible_pairs.append(p)
+            logger.info(f"Scanning {len(eligible_pairs)} eligible symbols out of {len(PAIRS)}")
+            
+            for p in eligible_pairs:
                 try:
                     handle_symbol(p)
                     time.sleep(0.15)
                 except Exception as e:
                     logger.exception(f"{p['symbol']} | Error in handle_symbol: {e}")
-
+            if len(eligible_pairs) == 0:
+                logger.info("No eligible pairs from daily bias. Skipping cycle.")
+                continue
+                    
+            process_signal_queue()
             # small sleep to avoid rate-limit bursts
             time.sleep(0.2)
 
