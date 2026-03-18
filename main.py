@@ -112,25 +112,57 @@ for p in PAIRS:
 def now_ts():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-
 def fetch_candles(symbol, interval=INTERVAL, limit=CANDLE_LIMIT):
-    try:
-        resp = session.get_kline(category="linear", symbol=symbol, interval=interval, limit=limit)
-        raw = resp["result"]["list"]
-        candles = list(reversed(raw))
-        parsed = []
-        for c in candles:
-            parsed.append({
-                "time": int(c[0]),
-                "open": float(c[1]),
-                "high": float(c[2]),
-                "low": float(c[3]),
-                "close": float(c[4])
-            })
-        return parsed
-    except Exception as e:
-        logger.error(f"{symbol} | Error fetching candles: {e}")
-        return []
+    for attempt in range(3):  # retry up to 3 times
+        try:
+            resp = session.get_kline(
+                category="linear",
+                symbol=symbol,
+                interval=interval,
+                limit=limit
+            )
+
+            raw = resp["result"]["list"]
+
+            if not raw:
+                logger.warning(f"{symbol} | Empty candle response")
+                return []
+
+            candles = list(reversed(raw))
+
+            parsed = []
+            for c in candles:
+                parsed.append({
+                    "time": int(c[0]),
+                    "open": float(c[1]),
+                    "high": float(c[2]),
+                    "low": float(c[3]),
+                    "close": float(c[4])
+                })
+
+            return parsed
+
+        except Exception as e:
+            err_msg = str(e)
+
+            # 🔥 HANDLE RATE LIMIT
+            if "10006" in err_msg or "Too many visits" in err_msg:
+                sleep_time = 1 + attempt  # exponential backoff
+                logger.warning(f"{symbol} | Rate limited, sleeping {sleep_time}s")
+                time.sleep(sleep_time)
+                continue
+
+            # 🔥 HANDLE HEADER ERROR
+            elif "x-bapi-limit-reset-timestamp" in err_msg:
+                logger.warning(f"{symbol} | Header missing, retrying...")
+                time.sleep(1)
+                continue
+
+            else:
+                logger.error(f"{symbol} | Error fetching candles: {e}")
+                return []
+
+    return []
 
 
 def seconds_until_next_candle(interval_minutes):
