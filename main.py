@@ -215,9 +215,29 @@ def refresh_symbol_universe_if_needed():
 
     PAIRS = new_pairs
 
-    symbol_state.clear()
-    daily_fvg_state.clear()
-    last_daily_check.clear()
+    
+    for p in new_pairs:
+        sym = p["symbol"]
+        if sym not in symbol_state:
+            symbol_state[sym] = {
+                "buy_fvg": None,
+                "sell_fvg": None,
+                "buy_trade": None,
+                "sell_trade": None,
+                "last_candle_time": 0,
+                "buy_fvg_candle_time": None,
+                "sell_fvg_candle_time": None}
+            
+        if sym not in daily_fvg_state:
+            daily_fvg_state[sym] = {
+                "allow_buy": False,
+                "allow_sell": False,
+                "last_new_buy_fvg": None,
+                "last_new_sell_fvg": None
+            }
+            
+        if sym not in last_daily_check:
+            last_daily_check[sym] = None
 
 
     for p in PAIRS:
@@ -383,7 +403,7 @@ def refresh_account_cache():
 
     except Exception as e:
         logger.error(f"Account cache refresh failed: {e}")
-        llllllllllll
+        
 def update_daily_bias(symbol):
     global daily_fvg_state, last_daily_check
 
@@ -524,11 +544,13 @@ def run_daily_fvg_scan(symbol, today):
         daily_fvg_state[symbol]["allow_buy"] = True
         daily_fvg_state[symbol]["last_new_buy_fvg"] = yesterday
         logger.info(f"{symbol} Previous Day Daily BUY FVG detected")
+        logger.info(f"{symbol} Yesterday date is {yesterday}")
 
     if prev_day_sell_fvg_exists:
         daily_fvg_state[symbol]["allow_sell"] = True
         daily_fvg_state[symbol]["last_new_sell_fvg"] = yesterday
         logger.info(f"{symbol} Previous Day Daily SELL FVG detected")
+        logger.info(f"{symbol} Yesterday date is {yesterday}")
             
 def log_candles(symbol, candles):
     logger.info(f"{symbol} | Retrieved {len(candles)} candles (oldest -> newest).")
@@ -1162,7 +1184,7 @@ def main():
         
     for p in PAIRS:
         set_symbol_leverage(p["symbol"], p["leverage"])
-        
+        time.sleep(0.2)
     lock_weekly_rf_if_needed()
 
     try:
@@ -1188,7 +1210,7 @@ def main():
             for p in PAIRS:
                 sym = p["symbol"]
                 if daily_fvg_state[sym]["allow_buy"] or daily_fvg_state[sym]["allow_sell"]:
-                    logger.info(f"{symbol} | Daily bias: buy={daily_fvg_state[symbol]['allow_buy']}, sell={daily_fvg_state[symbol]['allow_sell']}")
+                    logger.info(f"{sym} | Daily bias: buy={daily_fvg_state[sym]['allow_buy']}, sell={daily_fvg_state[sym]['allow_sell']}")
                     eligible_pairs.append(p)
             logger.info(f"Scanning {len(eligible_pairs)} eligible symbols out of {len(PAIRS)}")
             
