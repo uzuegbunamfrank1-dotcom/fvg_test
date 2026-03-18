@@ -686,8 +686,6 @@ def handle_symbol(pair):
         logger.warning(f"{symbol} | Not enough candles fetched ({len(candles)}). Skipping this cycle.")
         return
 
-    log_candles(symbol, candles)
-
     now_utc = datetime.now(timezone.utc)
     current_candle_open = int(now_utc.timestamp() // (int(INTERVAL) * 60)) * (int(INTERVAL) * 60) * 1000
     closed_candles = [c for c in candles if c["time"] < current_candle_open]
