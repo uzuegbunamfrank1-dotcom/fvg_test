@@ -171,7 +171,6 @@ def fetch_top_symbols():
     symbols = []
 
     for t in tickers:
-
         sym = t["symbol"]
 
         if not sym.endswith("USDT"):
@@ -187,18 +186,36 @@ def fetch_top_symbols():
     # rank by volume
     symbols.sort(key=lambda x: x["volume"], reverse=True)
 
-    selected = symbols[:MAX_SYMBOLS]
-
     pairs = []
 
-    for s in selected:
-        pairs.append({
-            "symbol": s["symbol"],
-            "leverage": DEFAULT_LEVERAGE
-        })
+    for s in symbols:
+        sym = s["symbol"]
+
+        try:
+            specs = get_symbol_specs(sym)
+            max_lev = specs["max_leverage"]
+
+            # ✅ FILTER HERE
+            if max_lev < 50:
+                continue
+
+            pairs.append({
+                "symbol": sym,
+                "leverage": max_lev
+            })
+
+            logger.info(f"Selected: {sym} | Max Lev: {max_lev}")
+
+            # ✅ STOP when we reach limit
+            if len(pairs) >= MAX_SYMBOLS:
+                break
+
+            time.sleep(0.05)  # avoid rate limit
+
+        except Exception as e:
+            logger.warning(f"{sym} | Spec fetch error: {e}")
 
     return pairs
-
 def refresh_symbol_universe_if_needed():
 
     global PAIRS, symbol_state, daily_fvg_state, last_daily_check, last_symbol_refresh_week
