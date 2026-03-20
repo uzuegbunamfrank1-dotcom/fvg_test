@@ -288,6 +288,10 @@ def refresh_symbol_universe_if_needed():
             daily_fvg_state[sym] = {
                 "allow_buy": False,
                 "allow_sell": False,
+                "buy_fvg_high": None,
+                "buy_fvg_low": None,
+                "sell_fvg_high": None,
+                "sell_fvg_low": None,
                 "last_new_buy_fvg": None,
                 "last_new_sell_fvg": None
             }
@@ -462,7 +466,7 @@ def refresh_account_cache():
     except Exception as e:
         logger.error(f"Account cache refresh failed: {e}")
         
-def update_daily_bias(symbol, current_price):
+def update_daily_bias(symbol):
     global daily_fvg_state, last_daily_check
 
     utc_plus_1 = timezone(timedelta(hours=1))
@@ -477,19 +481,6 @@ def update_daily_bias(symbol, current_price):
         run_daily_fvg_scan(symbol, today)
         last_daily_check[symbol] = today
         return
-
-    if daily_fvg_state[symbol]["allow_buy"]:
-        high = daily_fvg_state[symbol]["buy_fvg_high"]
-        if high is not None and current_price <= high:
-            daily_fvg_state[symbol]["allow_buy"] = False
-            logger.info(f"{symbol} BUY FVG invalidated (price reached upper boundary)")
-            
-    if daily_fvg_state[symbol]["allow_sell"]:
-        low = daily_fvg_state[symbol]["sell_fvg_low"]
-        if low is not None and current_price >= low:
-            daily_fvg_state[symbol]["allow_sell"] = False
-            logger.info(f"{symbol} SELL FVG invalidated (price reached lower boundary)")
-
 
     # -------------------------
     # ONLY RUN AT 01:00
@@ -774,6 +765,24 @@ def handle_symbol(pair):
         return
 
     last_closed = closed_candles[-1]
+    
+    if daily_fvg_state[symbol]["allow_buy"]:
+        current_price = last_closed["low"]
+        if daily_fvg_state[symbol]["buy_fvg_high"]:
+            high = daily_fvg_state[symbol]["buy_fvg_high"]
+            if high is not None and current_price <= high:
+                daily_fvg_state[symbol]["allow_buy"] = False
+                logger.info(f"{symbol} BUY FVG invalidated (price reached upper boundary)")
+            
+    if daily_fvg_state[symbol]["allow_sell"]:
+        current_price = last_closed["high"]
+        if daily_fvg_state[symbol]["sell_fvg_low"]:
+            low = daily_fvg_state[symbol]["sell_fvg_low"]
+            if low is not None and current_price >= low:
+                daily_fvg_state[symbol]["allow_sell"] = False
+                logger.info(f"{symbol} SELL FVG invalidated (price reached lower boundary)")
+
+    
     prev1 = closed_candles[-1]
     prev2 = closed_candles[-3]
     logger.info(f"{symbol} | prev2 H:{prev2['high']} L:{prev2['low']} | prev1 H:{prev1['high']} L:{prev1['low']}")
@@ -1277,13 +1286,9 @@ def main():
             time.sleep(wait + 0.8)  # small offset to ensure candle is closed on exchange
 
             refresh_account_cache()
-            
-            for p in PAIRS:
-                symbol = p["symbol"]
-                candles = fetch_candles(symbol)
-                current_price = candles[-1]["close"]
-                
-                update_daily_bias(p["symbol"], current_price)
+
+            for p in PAIRS: 
+                update_daily_bias(p["symbol"])
             
             # Lock per-day RF at start of UTC day if needed (one global RF for all pairs)
             lock_weekly_rf_if_needed()
