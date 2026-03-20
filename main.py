@@ -610,7 +610,7 @@ def run_daily_fvg_scan(symbol, today):
             daily_fvg_state[symbol]["allow_sell"] = False
             logger.info(f"{symbol} SELL FVG expired (2 days)")
 
-    raw = fetch_daily_klines()
+    raw = fetch_daily_klines(symbol)
     if not raw:
         return
         
