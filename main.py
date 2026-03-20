@@ -259,8 +259,12 @@ def refresh_symbol_universe_if_needed():
 
     global PAIRS, symbol_state, daily_fvg_state, last_daily_check, last_symbol_refresh_week
 
+    
     now = datetime.now(timezone.utc)
     week = (now.year, now.isocalendar()[1])
+
+    logger.info(f"WEEK: {week}")
+    logger.info(f"LAST_SYMBOL_REFRESH_WEEK: {last_symbol_refresh_week}")
 
     if week == last_symbol_refresh_week:
         return
@@ -419,6 +423,9 @@ def lock_weekly_rf_if_needed():
 
     now = datetime.now(timezone.utc)
     week = (now.year, now.isocalendar()[1])
+
+    logger.info(f"CURRENT WEEK: {current_week}")
+    logger.info(f"WEEK: {week}")
 
     if week != current_week:
         current_week = week
