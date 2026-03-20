@@ -57,8 +57,13 @@ for p in PAIRS:
     daily_fvg_state[p["symbol"]] = {
         "allow_buy": False,
         "allow_sell": False,
+        "buy_fvg_high": None,
+        "buy_fvg_low": None,
+        "sell_fvg_high": None,
+        "sell_fvg_low": None,
         "last_new_buy_fvg": None,
         "last_new_sell_fvg": None
+        
     }
 
 MAX_SYMBOLS = 50          # number of pairs to scan
@@ -182,6 +187,7 @@ def get_symbol_specs(symbol):
         category="linear",
         symbol=symbol
     )
+    time.sleep(0.1)
 
     data = info["result"]["list"][0]
 
@@ -198,6 +204,7 @@ def get_symbol_specs(symbol):
 def fetch_top_symbols():
 
     resp = session.get_tickers(category="linear")
+    time.sleep(0.2)
     tickers = resp["result"]["list"]
 
     symbols = []
@@ -368,6 +375,7 @@ def ensure_hedge_mode():
 def get_real_balance():
     try:
         resp = session.get_wallet_balance(accountType=ACCOUNT_TYPE)
+        time.sleep(0.1)
         coins = resp["result"]["list"][0]["coin"]
         for c in coins:
             if c["coin"] == "USDT":
@@ -438,6 +446,7 @@ def refresh_account_cache():
             category="linear",
             settleCoin="USDT"
         )
+        time.sleep(0.1)
 
         account_cache["positions"] = pos_resp["result"]["list"]
 
@@ -453,7 +462,7 @@ def refresh_account_cache():
     except Exception as e:
         logger.error(f"Account cache refresh failed: {e}")
         
-def update_daily_bias(symbol):
+def update_daily_bias(symbol, current_price):
     global daily_fvg_state, last_daily_check
 
     utc_plus_1 = timezone(timedelta(hours=1))
@@ -468,6 +477,19 @@ def update_daily_bias(symbol):
         run_daily_fvg_scan(symbol, today)
         last_daily_check[symbol] = today
         return
+
+    if daily_fvg_state[symbol]["allow_buy"]:
+        high = daily_fvg_state[symbol]["buy_fvg_high"]
+        if high is not None and current_price <= high:
+            daily_fvg_state[symbol]["allow_buy"] = False
+            logger.info(f"{symbol} BUY FVG invalidated (price reached upper boundary)")
+            
+    if daily_fvg_state[symbol]["allow_sell"]:
+        low = daily_fvg_state[symbol]["sell_fvg_low"]
+        if low is not None and current_price >= low:
+            daily_fvg_state[symbol]["allow_sell"] = False
+            logger.info(f"{symbol} SELL FVG invalidated (price reached lower boundary)")
+
 
     # -------------------------
     # ONLY RUN AT 01:00
@@ -486,7 +508,7 @@ def update_daily_bias(symbol):
     run_daily_fvg_scan(symbol, today)
 
     last_daily_check[symbol] = today
-
+    
 def process_signal_queue():
 
     global signal_queue
@@ -553,6 +575,7 @@ def run_daily_fvg_scan(symbol, today):
         interval="D",
         limit=6
     )
+    time.sleep(0.1)
 
     raw = resp["result"]["list"]
     candles = list(reversed(raw))
@@ -582,11 +605,19 @@ def run_daily_fvg_scan(symbol, today):
     if buy_fvg_exists:
         daily_fvg_state[symbol]["allow_buy"] = True
         daily_fvg_state[symbol]["last_new_buy_fvg"] = today
+        
+        daily_fvg_state[symbol]["buy_fvg_high"] = c3["low"]
+        daily_fvg_state[symbol]["buy_fvg_low"] = c1["high"]
+        
         logger.info(f"{symbol} Daily BUY FVG detected")
 
     if sell_fvg_exists:
         daily_fvg_state[symbol]["allow_sell"] = True
         daily_fvg_state[symbol]["last_new_sell_fvg"] = today
+
+        daily_fvg_state[symbol]["sell_fvg_high"] = c1["low"]
+        daily_fvg_state[symbol]["sell_fvg_low"] = c3["high"]
+        
         logger.info(f"{symbol} Daily SELL FVG detected")
         
     if prev_day_buy_fvg_exists:
@@ -1192,6 +1223,7 @@ def place_real_trade(symbol, side, entry, sl, tp, leverage, frozen_risk, qty):
             timeInForce="IOC",
             positionIdx=position_idx
         )
+        time.sleep(0.2)
 
         logger.info(f"{symbol} | Order response: {order_response}")
 
@@ -1202,6 +1234,7 @@ def place_real_trade(symbol, side, entry, sl, tp, leverage, frozen_risk, qty):
             stopLoss=str(sl),
             positionIdx=position_idx
         )
+        time.sleep(0.2)
 
         refresh_account_cache()
 
@@ -1246,7 +1279,11 @@ def main():
             refresh_account_cache()
             
             for p in PAIRS:
-                update_daily_bias(p["symbol"])
+                symbol = p["symbol"]
+                candles = fetch_candles(symbol)
+                current_price = candles[-1]["close"]
+                
+                update_daily_bias(p["symbol"], current_price)
             
             # Lock per-day RF at start of UTC day if needed (one global RF for all pairs)
             lock_weekly_rf_if_needed()
