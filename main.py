@@ -179,6 +179,49 @@ def seconds_until_next_candle(interval_minutes):
         wait += sec
     return wait
 
+def fetch_daily_klines(symbol, retries=3, base_delay=1):
+    for attempt in range(retries):
+        try:
+            resp = session.get_kline(
+                category="linear",
+                symbol=symbol,
+                interval="D",
+                limit=6
+            )
+
+            raw = resp["result"]["list"]
+
+            if not raw:
+                logger.warning(f"{symbol} | Empty daily kline response")
+                return None
+
+            time.sleep(0.3)  # keep your original delay
+            return raw
+
+        except Exception as e:
+            err_msg = str(e)
+
+            # 🔥 Rate limit handling
+            if "10006" in err_msg or "Too many visits" in err_msg:
+                delay = base_delay * (attempt + 1)
+                logger.warning(f"{symbol} | Rate limited (daily), retrying in {delay}s...")
+                time.sleep(delay)
+                continue
+
+            # 🔥 Header / transient API issue
+            elif "x-bapi-limit-reset-timestamp" in err_msg:
+                logger.warning(f"{symbol} | Header issue, retrying...")
+                time.sleep(1)
+                continue
+
+            # 🔥 Unknown error
+            else:
+                logger.error(f"{symbol} | Daily kline fetch error: {e}")
+                return None
+
+    logger.error(f"{symbol} | Failed to fetch daily klines after {retries} attempts")
+    return None
+
 def get_symbol_specs(symbol):
     if symbol in symbol_specs:
         return symbol_specs[symbol]
@@ -567,15 +610,10 @@ def run_daily_fvg_scan(symbol, today):
             daily_fvg_state[symbol]["allow_sell"] = False
             logger.info(f"{symbol} SELL FVG expired (2 days)")
 
-    resp = session.get_kline(
-        category="linear",
-        symbol=symbol,
-        interval="D",
-        limit=6
-    )
-    time.sleep(0.3)
-
-    raw = resp["result"]["list"]
+    raw = fetch_daily_klines()
+    if not raw:
+        return
+        
     candles = list(reversed(raw))
 
     df = pd.DataFrame([{
