@@ -575,7 +575,7 @@ def run_daily_fvg_scan(symbol, today):
         interval="D",
         limit=6
     )
-    time.sleep(0.1)
+    time.sleep(0.3)
 
     raw = resp["result"]["list"]
     candles = list(reversed(raw))
