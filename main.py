@@ -20,6 +20,8 @@ from datetime import datetime, timezone, timedelta
 from pybit.unified_trading import HTTP
 import pandas as pd
 import math
+from decimal import Decimal, ROUND_DOWN
+
 
 # ===========================
 # CONFIG (CHANGE AS NEEDED)
@@ -675,15 +677,18 @@ def log_candles(symbol, candles):
         logger.info(f"{symbol} | {t} | O:{c['open']} H:{c['high']} L:{c['low']} C:{c['close']}")
 
 def round_qty(symbol, qty):
-
     specs = get_symbol_specs(symbol)
 
-    step = specs["qty_step"]
-    min_qty = specs["min_qty"]
+    step = Decimal(str(specs["qty_step"]))
+    min_qty = Decimal(str(specs["min_qty"]))
+    qty = Decimal(str(qty))
 
-    qty = max(round(qty / step) * step, min_qty)
+    qty = (qty // step) * step  # floor to step
 
-    return qty    
+    if qty < min_qty:
+        qty = min_qty
+
+    return float(qty)
 
 def get_margin_usage():
     total = account_cache["wallet_balance"]
@@ -862,15 +867,6 @@ def handle_symbol(pair):
         state["buy_fvg_candle_time"] = prev1["time"]
         if not position_exists(symbol, "Buy"):
             logger.info(f"{symbol} | BUY FVG registered as active watcher (no active buy trade).")
-        else:
-            bt = state["buy_trade"]
-            buffered_new_sl = mid
-            if buffered_new_sl > bt["sl"]:
-                old_sl = bt["sl"]
-                bt["sl"] = buffered_new_sl
-                logger.info(f"{symbol} | BUY SL tightened {old_sl} -> {bt['sl']} (buffered)")
-            else:
-                logger.info(f"{symbol} | BUY trade open; new BUY FVG not favorable for SL (new_low={new_low} <= sl={bt['sl']})")
 
     # -----------------------
     # SELL FVG
@@ -892,15 +888,6 @@ def handle_symbol(pair):
         state["sell_fvg_candle_time"] = prev1["time"]
         if not position_exists(symbol, "Sell"):
             logger.info(f"{symbol} | SELL FVG registered as active watcher (no active sell trade).")
-        else:
-            st = state["sell_trade"]
-            buffered_new_sl = mid
-            if buffered_new_sl < st["sl"]:
-                old_sl = st["sl"]
-                st["sl"] = buffered_new_sl
-                logger.info(f"{symbol} | SELL SL tightened {old_sl} -> {st['sl']} (buffered)")
-            else:
-                logger.info(f"{symbol} | SELL trade open; new SELL FVG not favorable for SL (new_high={new_high} >= sl={st['sl']})")
 
     # -----------------------
     # TAP CHECK
@@ -1004,9 +991,9 @@ def handle_symbol(pair):
             sl = real_sl  # this is what will be sent to exchange
             
             state["buy_fvg"] = None
-            sl_pct = (entry - sl) / entry
+            sl_pct = (entry - risk_sl) / entry
             if sl_pct >= MIN_SL_PCT:
-                tp = entry + (entry - sl) * RR + (entry * TP_BUFFER)
+                tp = entry + (entry - risk_sl) * RR + (entry * TP_BUFFER)
                 logger.info(f"{symbol} | BUY CONFIRMED | entry={entry} sl={sl} tp={tp}")
                 if USE_REAL_TRADING and position_exists(symbol, "Sell"):
                     try:
@@ -1138,9 +1125,9 @@ def handle_symbol(pair):
             sl = real_sl
 
             state["sell_fvg"] = None
-            sl_pct = (sl - entry) / entry
+            sl_pct = (risk_sl - entry) / entry
             if sl_pct >= MIN_SL_PCT:
-                tp = entry - (sl - entry) * RR - (entry * TP_BUFFER)
+                tp = entry - (risk_sl - entry) * RR - (entry * TP_BUFFER)
                 logger.info(f"{symbol} | SELL CONFIRMED | entry={entry} sl={sl} tp={tp}")
                 if USE_REAL_TRADING and position_exists(symbol, "Buy"):
                     try:
